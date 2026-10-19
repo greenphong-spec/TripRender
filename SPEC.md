@@ -140,7 +140,7 @@ interface Track {
 - A *pause* is a time gap between consecutive points greater than **`pauseThreshold` (default 60 s)**, or any segment break.
 - **Skip pauses** toggle (default **on**): each pause takes **1 s** on the playback timeline (`playT`). The marker holds still and the info card shows a "Paused 11 h 47 min" chip during that second. Off: real time is used.
 - The chart x-axis follows `playT` (so it uses moving time when skipping), with a thin dashed break mark at each collapsed pause.
-- Header and footer show **total time** and **moving time**: "3:54:45 moving · 15:41:33 total".
+- Header and footer show **total time** and **moving time**: "03:27:30 moving · 15:41:33 total".
 
 ### 5.5 Derived values
 - **Distance**: haversine (R = 6,371,008.8 m), summed within segments only.
@@ -220,7 +220,7 @@ Splitting is done by MapLibre `line-gradient` with `lineMetrics: true` on one Ge
 
 ### 7.3 Playback bar
 - **Play/Pause** — 44 px teal circle. Space bar toggles it.
-- **Speed chips** — ×60, ×120 (default), ×240 as in the mockup, plus a "▾" menu for ×1, ×10, ×30, ×600, ×1200. On load the default is auto-picked: the smallest listed speed that makes the whole replay ≤ 90 s. Examples: Aug 31 (3 h 55 min moving) → ×240 (59 s); Apr 15 (2 min) → ×10 (12 s).
+- **Speed chips** — ×60, ×120 (default), ×240 as in the mockup, plus a "▾" menu for ×1, ×10, ×30, ×600, ×1200. On load the default is auto-picked: the smallest listed speed that makes the whole replay ≤ 90 s. Examples: Aug 31 (3 h 28 min after collapsing pauses) → ×240 (52 s); Apr 15 (2 min) → ×10 (12 s).
 - **Time readout**: `elapsed / total` (monospace), using the playback timeline.
 - Stats on the right: Avg, Max, Distance.
 - When playback reaches the end, it stops with the marker on the end point. Pressing Play again restarts from the beginning.
@@ -291,24 +291,24 @@ With no file loaded: the map shows the default view (last viewed area, or Vietna
 trackview/
   index.html
   package.json, tsconfig.json, vite.config.ts
-  public/samples/Sep_13,_2026_11_26_19.kmz
+  public/samples/sample.kmz  copy of Sep_13,_2026_11_26_19.kmz ("Try a sample")
   src/
-    main.ts                 app wiring
-    state.ts                playback state + event bus
-    parse/ gpx.ts kml.ts kmz.ts detect.ts
-    model/ clean.ts spikes.ts timing.ts derive.ts interpolate.ts units.ts
-    map/ map.ts styles.ts layers.ts controls.ts
+    main.ts                 app wiring: header, playback bar, open/drop, keyboard, toast
+    player.ts               playback clock + auto rate
     settings.ts             settings model + persistence
-    ui/ header.ts infocard.ts playbar.ts chart.ts settingspanel.ts dropzone.ts toast.ts
+    parse/ xml.ts gpx.ts kml.ts index.ts   (own small XML parser; KMZ unzip in index.ts)
+    model/ types.ts geo.ts build.ts spikes.ts interpolate.ts units.ts
+    map/ trackmap.ts styles.ts
+    ui/ chart.ts infocard.ts settingspanel.ts
     styles/ tokens.css app.css
-  test/ (Vitest) samples.test.ts spikes.test.ts interpolate.test.ts
+  test/ (Vitest) samples.test.ts spikes.test.ts
   src-tauri/                Tauri 2 shell (Cargo.toml, tauri.conf.json, src/main.rs, icons/)
 ```
 
 ## 11. Acceptance criteria
 Tests run against the files in `example_GPSfiles/`:
 
-1. **Aug 31 GPX**: 3 segments, 7,536 points (after merging same-time duplicates: 7,531 or more). Distance is 150.1 km ± 0.5 km and is **not** 165 km. Speed uses recorded `s`, and the max is about 115 km/h. Skip pauses on: the replay timeline is about 3 h 55 min, and ×240 finishes in ≤ 60 s. 5 waypoints are shown.
+1. **Aug 31 GPX**: 3 segments, 7,536 points (after merging same-time duplicates: 7,531 or more). Distance is 150.1 km ± 0.5 km and is **not** 165 km. Speed uses recorded `s`, and the max is about 115 km/h. Skip pauses on: the replay timeline is about 3 h 28 min (all 17 pauses collapsed, including Geo Tracker's ~2 min stops), and ×240 finishes in ≤ 60 s. 5 waypoints are shown.
 2. **Both "phan thiet…" GPX files** load identically to each other.
 3. **52100 KMZ**: untimed mode, 3 segments, about 150 km. The chart shows elevation vs distance. 3 stop waypoints are shown. No crash on the CDATA names.
 4. **Apr 15 / Aug 24 KML, Sep 13 KMZ**: timed mode with recorded speed. Point counts are 112 / 362 / 163, and the stop Placemark's `<when>` is not counted as a point.

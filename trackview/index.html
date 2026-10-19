@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Trackview</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+    />
+  </head>
+  <body>
+    <header class="hdr">
+      <div class="brand">
+        <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+          <path d="M6 25 C 11 25, 10 12, 16 14 S 21 6, 26 7" />
+          <circle cx="6" cy="25" r="2.6" />
+          <circle cx="26" cy="7" r="2.6" />
+        </svg>
+        <span>Trackview</span>
+      </div>
+      <div class="file-info" id="file-info" hidden>
+        <span class="chip mono" id="file-name"></span>
+        <span class="summary" id="file-summary"></span>
+      </div>
+      <div class="spacer"></div>
+      <span class="drop-hint">Drop a file or</span>
+      <button class="btn primary" id="open-btn" type="button">
+        <svg class="ico open-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h6l2 2h8v9a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z" /></svg>
+        <span>Open file</span>
+      </button>
+      <input type="file" id="file-input" accept=".gpx,.kml,.kmz" hidden />
+      <span class="formats"><span class="fmt">GPX</span><span class="fmt">KML</span><span class="fmt">KMZ</span></span>
+      <button class="icon-btn" id="settings-btn" type="button" title="Settings" aria-label="Settings">
+        <svg class="ico" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+        </svg>
+      </button>
+    </header>
+
+    <main class="map-wrap">
+      <div id="map"></div>
+
+      <section class="info-card" id="info-card" hidden>
+        <div class="ic-top">
+          <span class="ic-label">AT</span>
+          <span class="ic-time mono" id="ic-time">00:00:00</span>
+          <button class="ic-collapse" id="ic-collapse" type="button" aria-label="Collapse">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6-6 6 6" /></svg>
+          </button>
+        </div>
+        <div class="ic-clock mono" id="ic-clock">—</div>
+        <div class="ic-badges" id="ic-badges"></div>
+        <div class="ic-grid">
+          <div><div class="ic-k">Speed</div><div class="ic-v mono"><span id="ic-speed">—</span> <small id="ic-speed-u">km/h</small></div></div>
+          <div><div class="ic-k">Distance</div><div class="ic-v mono"><span id="ic-dist">—</span> <small id="ic-dist-u">km</small></div></div>
+          <div><div class="ic-k">Elevation</div><div class="ic-v mono"><span id="ic-ele">—</span> <small id="ic-ele-u">m</small></div></div>
+          <div><div class="ic-k">Position</div><div class="ic-pos mono"><span id="ic-lat">—</span><span id="ic-lon"></span></div></div>
+        </div>
+      </section>
+
+      <div class="map-ctrls">
+        <button class="map-btn" id="zoom-in" type="button" title="Zoom in" aria-label="Zoom in">
+          <svg class="ico" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>
+        </button>
+        <button class="map-btn" id="zoom-out" type="button" title="Zoom out" aria-label="Zoom out">
+          <svg class="ico" viewBox="0 0 24 24"><path d="M5 12h14" /></svg>
+        </button>
+        <button class="map-btn" id="fit-btn" type="button" title="Fit track / follow marker" aria-label="Fit track">
+          <svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" /><path d="M12 2v4M12 18v4M2 12h4M18 12h4" /></svg>
+        </button>
+        <button class="map-btn" id="style-btn" type="button" title="Map style" aria-label="Map style">
+          <svg class="ico" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5z" /><path d="M3 13l9 5 9-5" /></svg>
+        </button>
+        <div class="style-menu" id="style-menu" hidden>
+          <button type="button" data-style="light">Light</button>
+          <button type="button" data-style="streets">Streets</button>
+          <button type="button" data-style="satellite">Satellite</button>
+        </div>
+      </div>
+      <div class="notice" id="offline-notice" hidden>Map tiles unavailable — offline?</div>
+    </main>
+
+    <footer class="player">
+      <div class="bar">
+        <button class="play" id="play-btn" type="button" aria-label="Play" disabled>
+          <svg class="ico-play" viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z" /></svg>
+          <svg class="ico-pause" viewBox="0 0 24 24"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" /></svg>
+        </button>
+        <div class="rates" id="rates">
+          <button type="button" data-rate="60">×60</button>
+          <button type="button" data-rate="120">×120</button>
+          <button type="button" data-rate="240">×240</button>
+          <button type="button" class="more" id="rate-more" aria-label="More speeds">▾</button>
+          <div class="rate-menu" id="rate-menu" hidden>
+            <button type="button" data-rate="1">×1</button>
+            <button type="button" data-rate="10">×10</button>
+            <button type="button" data-rate="30">×30</button>
+            <button type="button" data-rate="600">×600</button>
+            <button type="button" data-rate="1200">×1200</button>
+          </div>
+        </div>
+        <div class="readout mono"><span id="pos-time">00:00:00</span> <span class="sep">/</span> <span id="dur-time">00:00:00</span></div>
+        <div class="spacer"></div>
+        <div class="stats" id="stats">
+          <span>Avg <b class="mono" id="st-avg">—</b> <i id="st-avg-u">km/h</i></span>
+          <span>Max <b class="mono" id="st-max">—</b> <i id="st-max-u">km/h</i></span>
+          <span>Distance <b class="mono" id="st-dist">—</b> <i id="st-dist-u">km</i></span>
+        </div>
+      </div>
+      <div class="chart-wrap" id="chart-wrap">
+        <div class="chart-unit" id="chart-unit"></div>
+        <div id="chart"></div>
+        <div class="chart-tip mono" id="chart-tip" hidden></div>
+        <div class="chart-empty" id="chart-empty">
+          <span>Open a GPX, KML or KMZ file to replay it.</span>
+          <button type="button" class="link" id="sample-btn">Try a sample</button>
+        </div>
+      </div>
+    </footer>
+
+    <aside class="settings" id="settings" hidden>
+      <div class="set-head">
+        <h2>Settings</h2>
+        <button class="icon-btn" id="settings-close" type="button" aria-label="Close settings">
+          <svg class="ico" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg>
+        </button>
+      </div>
+      <form class="set-body" id="settings-form" onsubmit="return false">
+        <label class="row">Units
+          <select name="units"><option value="metric">Metric (km/h, km, m)</option><option value="imperial">Imperial (mph, mi, ft)</option></select>
+        </label>
+        <label class="row">Map style
+          <select name="mapStyle"><option value="light">Light</option><option value="streets">Streets</option><option value="satellite">Satellite</option></select>
+        </label>
+        <label class="row check"><input type="checkbox" name="skipPauses" /> Skip pauses</label>
+        <label class="row">Pause threshold (seconds)
+          <input type="number" name="pauseThresholdSec" min="10" max="1800" step="5" />
+        </label>
+        <label class="row check"><input type="checkbox" name="removeSpikes" /> Remove GPS spikes</label>
+        <label class="row">Spike distance (metres)
+          <input type="number" name="spikeDistanceM" min="10" max="500" step="5" />
+        </label>
+        <label class="row">Speed for estimated timing
+          <select name="estimatedSpeed"><option value="derived">Derived</option><option value="hidden">Hidden</option></select>
+        </label>
+        <label class="row check"><input type="checkbox" name="follow" /> Follow marker while playing</label>
+      </form>
+      <dl class="set-info" id="file-details"></dl>
+    </aside>
+
+    <div class="drop-overlay" id="drop-overlay" hidden><div>Drop GPX, KML or KMZ</div></div>
+    <div class="toast" id="toast" hidden></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
