@@ -13,15 +13,19 @@ const validCoord = (p: RawPoint) =>
 
 /** Fill missing times inside a segment by linear interpolation over the point index. */
 function fillTimes(seg: RawPoint[]): void {
-  const known = seg.map((p, i) => (p.t !== null ? i : -1)).filter((i) => i >= 0);
-  if (!known.length) return;
+  let prev = -1;
   for (let i = 0; i < seg.length; i++) {
-    if (seg[i].t !== null) continue;
-    const next = known.find((k) => k > i);
-    const prev = [...known].reverse().find((k) => k < i);
-    if (prev === undefined) seg[i].t = seg[next!].t;
-    else if (next === undefined) seg[i].t = seg[prev].t;
-    else seg[i].t = seg[prev].t! + ((seg[next].t! - seg[prev].t!) * (i - prev)) / (next - prev);
+    if (seg[i].t !== null) { prev = i; continue; }
+    let next = i + 1;
+    while (next < seg.length && seg[next].t === null) next++;
+    if (prev < 0 && next >= seg.length) return; // no time anywhere in this segment
+    // Fill the whole gap i..next-1 in one pass.
+    for (let k = i; k < next; k++) {
+      if (prev < 0) seg[k].t = seg[next].t;
+      else if (next >= seg.length) seg[k].t = seg[prev].t;
+      else seg[k].t = seg[prev].t! + ((seg[next].t! - seg[prev].t!) * (k - prev)) / (next - prev);
+    }
+    i = next - 1;
   }
 }
 
