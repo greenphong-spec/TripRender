@@ -1,0 +1,2 @@
+# Keep GPS samples byte-exact (tests compare checksums and sizes)
+example_GPSfiles/** -text
