@@ -1,8 +1,3 @@
-# GPXSee build output and Qt installer log
-/build/
-/aqtinstall.log
-# Upstream GPXSee clone (has its own git history)
-/GPXSee/
 # Local Claude Code settings
 /.claude/settings.local.json
 # Duplicate of example_GPSfiles/Aug_31,_2026_15_20_59.gpx
