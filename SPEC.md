@@ -1,9 +1,9 @@
-# Trackview — Specification (v0.1, draft for review)
+# Trackview — Specification (v0.2)
 
-A browser-based GPS track viewer that **replays** a recorded trip on a real online map,
+A desktop GPS track viewer (web UI in a Tauri shell) that **replays** a recorded trip on a real online map,
 with a live info card and a speed chart synced to the map. Target look: `expected_UI.png`.
 
-Status: specification only — nothing implemented yet. Open questions are in §12.
+Status: approved for implementation 2026-10-19. The decisions taken on the v0.1 open questions are in §12.
 
 ---
 
@@ -23,13 +23,15 @@ Status: specification only — nothing implemented yet. Open questions are in §
 - FIT, TCX, NMEA and other formats (the parser layer is pluggable, so they can be added later).
 - Several tracks open at once (one file at a time in v1).
 - Changes to the GPXSee C++ code — Trackview is a separate app (see §2).
+- An Android build. Not in v1, but the code must stay Android-friendly: touch input works, layout works at phone width, no Windows-only APIs. Tauri 2 can build an APK from the same project later.
 
 ## 2. Platform decision
 
 | Option | Verdict |
 |---|---|
 | Extend GPXSee (Qt/C++) | Rejected for v1. It would need a playback engine, split-colour path drawing, a new info overlay and a transport bar across `MapView`, `PathItem` and `GraphView`. The mockup's look is far from the Qt widget style. |
-| **Standalone web app** | **Chosen.** The mockup is a web layout. Vector maps, fluid animation and the synced chart are cheap to build here, and it runs in any browser on Windows. |
+| **Standalone web app in a Tauri 2 desktop shell** | **Chosen.** The mockup is a web layout. Vector maps, fluid animation and the synced chart are cheap to build here. Tauri wraps the app as a small Windows `.exe` that uses the Edge WebView2 already on the PC, and the same project can target Android later. |
+| Electron | Rejected: ~150 MB per app and no Android path. |
 
 **Stack**
 
@@ -41,10 +43,19 @@ Status: specification only — nothing implemented yet. Open questions are in §
 | Speed chart | uPlot (small, fast, canvas; custom cursor/shading via hooks) | 1.6.32 |
 | KMZ unzip | fflate | 0.8.3 |
 | XML parsing | Browser `DOMParser` (no dependency) | — |
+| Tests | Vitest | latest 3.x/4.x |
+| Desktop shell | Tauri 2 (Rust, WebView2) | 2.x |
 
 No framework (React etc.). The UI is small: plain TS modules plus CSS. Node 24 is installed locally.
 
-**Deliverable**: `trackview/` folder at the repo root. `npm run dev` starts the dev server; `npm run build` produces a static `dist/` that can be opened from any static host or `npx vite preview`.
+**Tauri specifics**
+- The window opens at 1440×900 (minimum 960×600), titled "Trackview".
+- `dragDropEnabled: false` on the window, so HTML5 drag-and-drop reaches the page. (Tauri otherwise captures file drops on Windows.)
+- Files are opened through the HTML `<input type=file>` and drop events. No Rust file-system plugin is needed in v1.
+- The CSP allows `https:` for tiles, styles, fonts and glyphs, and `blob:` for MapLibre workers.
+- Commands: `npm run dev` (browser), `npm run tauri dev` (desktop window, hot reload), `npm run tauri build` (produces `Trackview.exe` and an installer under `src-tauri/target/release/`).
+
+**Deliverable**: a `trackview/` folder at the repo root. `npm run dev` runs it in the browser, `npm run tauri build` produces the desktop `.exe`, and `npm test` runs the tests against `example_GPSfiles/`.
 
 ## 3. Sample-file analysis (`example_GPSfiles/`)
 
@@ -111,12 +122,18 @@ interface Track {
 - Drop points with non-finite or out-of-range lat/lon.
 - Timed tracks: sort points by `t` within each segment (stable sort), then merge points with identical `t` (keep the last one). This fixes the 5 dt ≤ 0 points in the Aug 31 file.
 - Keep duplicate consecutive positions — they represent stopped time.
+- **Off-route spike filter** (setting "Remove GPS spikes", default **on**). It removes points that jump away from the route and back. It runs within each segment, comparing each candidate point *p* with the last kept point *a* and the next point *c*. *p* is dropped when either:
+  - **detour**: *p* lies more than `spikeDistance` (default **50 m**, configurable 10–500 m) from the line *a*–*c*, **and** (|ap| + |pc|) / |ac| > 3; or
+  - **impossible speed** (timed tracks only): the speed implied from *a* to *p* is above 250 km/h.
+
+  This also catches spikes of up to 3 consecutive points, because *c* moves forward while *a* stays put; after 3 points the run is kept as real movement. The first and last point of a segment are never dropped. The number of removed points is shown in the settings panel ("3 spike points removed"). Turning the setting off reloads the track without filtering.
+  The samples contain no spikes: the largest deviation from the route is 18 m. So with the default 50 m the filter must remove **0** points from every sample file, and its behaviour is tested with synthetic spikes.
 
 ### 5.3 Timing modes
 | Mode | When | Timeline |
 |---|---|---|
 | `timed` | ≥ 90 % of points have a time | Real timestamps. Points without a time get an interpolated value. |
-| `estimated` | No per-point time, but a start/end time is found: dashcam `Start: … End: …` text in `<description>`, or a `TimeSpan` | Times spread **evenly per point** between start and end (the dashcam log is ~1 Hz). The UI shows an "Estimated time" badge. Camera local time is read in the configured time zone (default Asia/Ho_Chi_Minh for this producer). |
+| `estimated` | No per-point time, but a start/end time is found: dashcam `Start: … End: …` text in `<description>`, or a `TimeSpan` | Times spread **evenly per point** between start and end (the dashcam log is ~1 Hz). The UI shows an "Estimated time" badge. Camera local time has no offset in the file and is read as UTC+07:00. Only durations matter for playback, so a wrong offset would only change the clock text. |
 | `untimed` | Nothing found | Playback by **distance**: the timeline is built at a nominal 50 km/h. The chart shows **elevation vs distance**, or a distance-only progress bar if elevation is missing. Speed shows "—". Badge "No time data". |
 
 ### 5.4 Pauses (timed / estimated)
@@ -128,6 +145,7 @@ interface Track {
 ### 5.5 Derived values
 - **Distance**: haversine (R = 6,371,008.8 m), summed within segments only.
 - **Speed**: use `speedRec` if ≥ 90 % of points have it. Otherwise derive it as distance/time over a centred ±2-point window. Values above 250 km/h, or implying more than 15 m/s² acceleration, are treated as outliers and replaced by interpolation.
+- **Estimated-time tracks (dashcam)**: setting "Speed for estimated timing" = **Derived** (default; computed as above from the estimated times) or **Hidden**. Hidden shows "—" in the info card and the elevation/distance chart instead, and the footer shows the avg/max stated in the file's description (e.g. "Max 99 km/h · Avg 35.2 km/h").
 - **Chart smoothing**: a 5-sample moving average for display only. The info card shows the unsmoothed, interpolated value.
 - **Stats**: avg speed = moving distance / moving time; max speed = 99th-percentile-capped maximum of speed after outlier removal; total distance; elevation min/max and gain (ignoring changes under 3 m).
 
@@ -141,7 +159,7 @@ Binary-search `playT` for the bracketing points i, i+1 and compute the fraction 
 |---|---|---|
 | **Light (default)** | OpenFreeMap `https://tiles.openfreemap.org/styles/positron` | Clean grey-green look matching the mockup |
 | Streets | OpenFreeMap `…/styles/liberty` | Colourful street map |
-| Satellite | Esri World Imagery raster `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}` | Optional; personal / non-commercial use under Esri's terms |
+| Satellite | Esri World Imagery raster `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}` | No key needed; fine for this personal desktop use. Attribution "Esri, Maxar, Earthstar Geographics" shown. Replace it only if the app is ever published. |
 
 - All three endpoints were checked and respond (HTTP 200, 2026-10-19).
 - OpenFreeMap: OpenStreetMap data, no API key, no registration, no published request limit. Attribution "© OpenFreeMap © OpenMapTiles Data from OpenStreetMap" stays visible at all times (MapLibre attribution control).
@@ -189,12 +207,13 @@ Splitting is done by MapLibre `line-gradient` with `lineMetrics: true` on one Ge
 - Logo mark and "Trackview".
 - File chip (monospace) with the file name; the full name is in a tooltip if truncated.
 - Summary: distance · duration (moving) · point count.
+- **Settings** gear button at the far right (§7.7).
 - "Drop a file or" + **Open file** button (teal `#0F5C5C`), plus GPX / KML / KMZ format chips (static labels).
 - The whole window is a drop target. While dragging over it, show a full-window dashed overlay "Drop GPX, KML or KMZ".
 
 ### 7.2 Info card (top-left overlay, 270 px wide, white, 12 px radius, soft shadow)
-- **AT** label + elapsed playback time, large monospace (`HH:MM:SS`). Below it, smaller: the clock time and date in the configured time zone (e.g. "15:45:30 · 31 Aug").
-- 2×2 grid: **Speed** (km/h, 1 decimal), **Distance** (km, 1 decimal), **Elevation** (m, integer), **Position** (lat/lon, 5 decimals, with N/S/E/W).
+- **AT** label + elapsed playback time, large monospace (`HH:MM:SS`). The timeline always runs from 00:00:00 to the track duration. The real clock time appears only here, as a small line under the elapsed time (e.g. "15:45:30 · 31 Aug 2026", in the PC's time zone; "—" for untimed tracks).
+- 2×2 grid: **Speed** (km/h or mph, 1 decimal), **Distance** (km or mi, 1 decimal), **Elevation** (m or ft, integer), **Position** (lat/lon, 5 decimals, with N/S/E/W).
 - Badges when they apply: "Estimated time", "No time data", "Paused …".
 - Values update at most every 100 ms (to avoid flicker) using tabular digits.
 - Collapsible to just the time row (chevron) on small screens.
@@ -233,7 +252,22 @@ Light theme only in v1; all colours are CSS variables, so a dark theme can be ad
 - < 1024 px: the stats move to a second row of the playback bar.
 - < 640 px: the info card collapses to a single line, the chart is 100 px tall, map controls are 40 px, and the header shows the file chip only (the open button becomes an icon).
 
-### 7.7 Empty state
+### 7.7 Settings panel
+A right-side drawer (360 px; full width on a phone) opened from the header gear. Changes apply immediately and are saved (§8).
+
+| Setting | Options | Default |
+|---|---|---|
+| Units | Metric (km/h, km, m) / Imperial (mph, mi, ft) | Metric |
+| Map style | Light / Streets / Satellite | Light |
+| Skip pauses | on / off | on |
+| Pause threshold | 10 s – 30 min | 60 s |
+| Remove GPS spikes | on / off, plus the spike distance (10–500 m) | on, 50 m |
+| Speed for estimated timing | Derived / Hidden | Derived |
+| Follow marker while playing | on / off | on |
+
+The panel also shows read-only file info: format, producer (`creator`), timing mode, number of points and segments, and spike points removed.
+
+### 7.8 Empty state
 With no file loaded: the map shows the default view (last viewed area, or Vietnam if none saved), the chart area shows "Open a GPX, KML or KMZ file to replay it", and playback controls are disabled. A "Try a sample" link loads a bundled copy of `Sep_13,_2026_11_26_19.kmz` (small, timed, with recorded speed).
 
 ## 8. Playback engine
@@ -241,7 +275,7 @@ With no file loaded: the map shows the default view (last viewed area, or Vietna
 - A `requestAnimationFrame` loop: `pos += (now − last) × rate`, clamped to `[0, duration]`. The frame delta is capped at 100 ms, so a background tab doesn't jump.
 - One `onPosition(pos)` event fans out to: the map marker and gradient, the info card (throttled to 100 ms), the chart cursor and the follow camera.
 - Seeking from the chart, keyboard or end-of-track goes through the same `seek(pos)` call.
-- Settings saved in `localStorage` (wrapped in try/catch): rate, skip-pauses, pause threshold, time zone, map style, last map view.
+- Settings saved in `localStorage` (wrapped in try/catch; WebView2 keeps it between app launches): every setting in §7.7, plus the last playback rate and the last map view.
 
 ## 9. Performance targets
 | Item | Target |
@@ -262,11 +296,13 @@ trackview/
     main.ts                 app wiring
     state.ts                playback state + event bus
     parse/ gpx.ts kml.ts kmz.ts detect.ts
-    model/ clean.ts timing.ts derive.ts interpolate.ts
+    model/ clean.ts spikes.ts timing.ts derive.ts interpolate.ts units.ts
     map/ map.ts styles.ts layers.ts controls.ts
-    ui/ header.ts infocard.ts playbar.ts chart.ts dropzone.ts toast.ts
+    settings.ts             settings model + persistence
+    ui/ header.ts infocard.ts playbar.ts chart.ts settingspanel.ts dropzone.ts toast.ts
     styles/ tokens.css app.css
-  test/ (Vitest) parse.*.test.ts derive.test.ts interpolate.test.ts
+  test/ (Vitest) samples.test.ts spikes.test.ts interpolate.test.ts
+  src-tauri/                Tauri 2 shell (Cargo.toml, tauri.conf.json, src/main.rs, icons/)
 ```
 
 ## 11. Acceptance criteria
@@ -281,11 +317,16 @@ Tests run against the files in `example_GPSfiles/`:
 7. The travelled path is red up to exactly the marker, and the rest is slate.
 8. With the network disabled, a file still loads, plays and charts, and the offline notice is shown.
 9. The layout matches `expected_UI.png` at 1440×900, with no horizontal scroll at 375 px width.
+10. **Spike filter**: it removes 0 points from every sample file. On a synthetic copy of the Apr 15 track with 1-, 2- and 3-point spikes injected 300 m off-route, every spike point is removed and no other point is.
+11. **Units**: switching to Imperial shows the Aug 31 distance as 93.3 mi and its max speed as about 71 mph, with no reload needed.
+12. **Desktop**: `npm run tauri build` produces a working `Trackview.exe`. In it, drag-and-drop of a file from Explorer works, tiles load, and settings survive a restart.
 
-## 12. Open questions
-1. **Pause threshold**: is 60 s the right default? Geo Tracker's own "stops" are about 2 min.
-2. **Time zone**: should the default be the browser's zone or always Asia/Ho_Chi_Minh?
-3. **Units**: metric only, or a km/h ↔ mph toggle? (The Geo Tracker waypoint descriptions use ft/mi.)
-4. **Dashcam estimated speed**: show the derived speed (distance per estimated second, which is noisy where the camera dropped samples), or show only the file's stated avg/max?
-5. **Satellite style**: keep Esri imagery (terms limit it to personal use), or drop it?
-6. **Delivery**: a dev server / static folder is assumed. Should it also be wrapped as a desktop app (e.g. Tauri) later?
+## 12. Decisions (v0.1 open questions, answered 2026-10-19)
+| # | Question | Decision |
+|---|---|---|
+| 1 | Pause threshold | Keep 60 s (configurable). Additionally, add the **off-route spike filter** (§5.2), on by default. |
+| 2 | Time zone | Not important. The timeline runs 0 → duration; the clock time is shown only as a text line in the info card, in the PC's zone (§7.2). |
+| 3 | Units | Metric by default; Imperial in settings (§7.7). |
+| 4 | Dashcam speed | Derived speed by default; can be set to Hidden in settings (§5.5). |
+| 5 | Satellite | Keep Esri World Imagery as the simple no-key option for personal use (§6.1). |
+| 6 | Delivery | Desktop app on Windows via **Tauri 2** now (§2); keep the code Android-ready for a later APK. |
