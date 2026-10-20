@@ -178,6 +178,7 @@ Binary-search `playT` for the bracketing points i, i+1 and compute the fraction 
 Splitting is done by MapLibre `line-gradient` with `lineMetrics: true` on one GeoJSON line per segment, updating the gradient stop at the current progress each frame. This is cheap and avoids rebuilding geometry. If perf tests show this is too slow, fall back to updating a "travelled" source with a sliced coordinate array at a throttled 15 Hz.
 
 ### 6.3 Map controls (bottom-right, 44 px square white buttons)
+- **Zoom readout** above the buttons: the current map zoom with one decimal ("z 14.2"), updated live while zooming. Clicking it copies the number to the clipboard (toast "Zoom 14.2 copied"), so it can be reused later, e.g. typed into Export video → Zoom (§13.3, which also has "Use current map zoom").
 - Zoom in (+), zoom out (−).
 - **Fit / follow** (crosshair icon). When stopped, one click fits the whole track. While playing, each click moves to the next **camera mode** (§13.4): Off → Follow north up → Follow heading up → Keep in view → Off. The button shows the active mode. "Keep in view" pans the camera to keep the marker inside the middle 60 % of the view. Any manual pan or rotate sets the mode to Off.
 - Style switcher (layers icon): Light / Streets / Satellite.

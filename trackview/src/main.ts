@@ -250,6 +250,20 @@ $('rates').addEventListener('click', (e) => {
 });
 
 // ---------- Map controls ----------
+// Zoom readout (§6.3): shows the map zoom to reuse later, e.g. in Export video → Zoom.
+const zoomText = () => map.map.getZoom().toFixed(1);
+const renderZoom = () => ($('zoom-level').textContent = `z ${zoomText()}`);
+map.map.on('zoom', renderZoom);
+renderZoom();
+$('zoom-level').addEventListener('click', async () => {
+  const z = zoomText();
+  try {
+    await navigator.clipboard.writeText(z);
+    toast(`Zoom ${z} copied`);
+  } catch {
+    toast(`Zoom ${z}`);
+  }
+});
 $('zoom-in').addEventListener('click', () => map.zoomBy(1));
 $('zoom-out').addEventListener('click', () => map.zoomBy(-1));
 // Stopped: fit the track and restore the chosen camera. Playing: next camera mode (§6.3).
