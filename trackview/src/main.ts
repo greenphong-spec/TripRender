@@ -1,5 +1,7 @@
 import './styles/tokens.css';
 import './styles/app.css';
+import { ExportPanel } from './export/exportpanel';
+import { CAMERA_CYCLE, CAMERA_LABEL } from './map/camera';
 import { TrackMap } from './map/trackmap';
 import { buildTrack } from './model/build';
 import { sampleAt } from './model/interpolate';
@@ -7,9 +9,10 @@ import type { RawTrack, Track } from './model/types';
 import { distUnit, distValue, fmt, hms, speedUnit, speedValue } from './model/units';
 import { parseTrackFile } from './parse';
 import { autoRate, Player, RATES } from './player';
-import { loadSettings, saveSettings, type BuildSettings, type Settings } from './settings';
+import { loadSettings, saveSettings, type BuildSettings, type CameraMode, type Settings } from './settings';
 import { SpeedChart } from './ui/chart';
 import { InfoCard } from './ui/infocard';
+import { MarkerPanel } from './ui/markerpanel';
 import { SettingsPanel } from './ui/settingspanel';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -20,7 +23,8 @@ const CARD_INSET = 24 + 272; // info card margin + width, kept clear when fittin
 let settings: Settings = loadSettings();
 let raw: RawTrack | null = null;
 let track: Track | null = null;
-let followActive = settings.follow;
+/** Camera mode in effect; a manual pan turns it off until the next fit or file load (§6.3). */
+let camMode: CameraMode = settings.camera;
 let resumeAfterScrub = false;
 
 const player = new Player();
@@ -39,10 +43,9 @@ function toast(message: string, error = false) {
 
 // ---------- Map ----------
 let viewTimer = 0;
-const map = new TrackMap($('map'), settings.mapStyle, settings.view, {
+const map = new TrackMap($('map'), settings.mapStyle, settings.view, settings.marker, {
   onUserPan() {
-    followActive = false;
-    renderFollow();
+    setCamera('off');
   },
   onViewChange(view) {
     clearTimeout(viewTimer);
@@ -53,8 +56,20 @@ const map = new TrackMap($('map'), settings.mapStyle, settings.view, {
   },
 });
 
-function renderFollow() {
-  $('fit-btn').classList.toggle('active', !!track && followActive && settings.follow);
+const CAMERA_BADGE: Record<CameraMode, string> = { off: '', north: 'N', heading: '↑', keep: '' };
+
+function setCamera(mode: CameraMode) {
+  camMode = mode;
+  map.setCamera(mode);
+  renderCamera();
+}
+
+function renderCamera() {
+  const btn = $('fit-btn');
+  const on = !!track && camMode !== 'off';
+  btn.classList.toggle('active', on);
+  btn.dataset.badge = on ? CAMERA_BADGE[camMode] : '';
+  btn.title = `Fit track / camera: ${CAMERA_LABEL[camMode]}`;
 }
 
 const cardInset = () => (!$('info-card').hidden && window.innerWidth > 640 ? CARD_INSET : 0);
@@ -75,13 +90,14 @@ const chart = new SpeedChart($('chart'), $('chart-tip'), $('chart-unit'), {
 function updateSettings(patch: Partial<Settings>) {
   const prev = settings;
   settings = { ...settings, ...patch };
-  saveSettings(settings);
-  if (patch.view) return;
+  if (!saveSettings(settings) && patch.marker?.imageDataUrl) toast('The marker image could not be saved for next time (storage full).', true);
+  if (patch.view || patch.export) return;
 
   if (patch.mapStyle && patch.mapStyle !== prev.mapStyle) map.setStyle(settings.mapStyle);
-  if ('follow' in patch) {
-    followActive = settings.follow;
-    renderFollow();
+  if (patch.camera && patch.camera !== prev.camera) setCamera(settings.camera);
+  if (patch.marker) {
+    map.setMarker(settings.marker);
+    onPosition(true);
   }
   if (BUILD_KEYS.some((k) => k in patch && patch[k] !== prev[k])) rebuild();
   else if (patch.units && patch.units !== prev.units && track) {
@@ -90,8 +106,23 @@ function updateSettings(patch: Partial<Settings>) {
     onPosition(true);
   }
   renderStyleMenu();
+  exportPanel.refresh();
 }
 const panel = new SettingsPanel(() => settings, updateSettings);
+new MarkerPanel(() => settings.marker, (marker) => updateSettings({ marker }), toast);
+const exportPanel = new ExportPanel({
+  track: () => track,
+  settings: () => settings,
+  update: updateSettings,
+  playerPos: () => player.pos,
+  pausePlayer: () => player.pause(),
+  mapZoom: () => map.map.getZoom(),
+  openMarkerSettings() {
+    panel.toggle(true);
+    document.getElementById('marker-panel')!.scrollIntoView({ block: 'start' });
+  },
+  toast,
+});
 
 // ---------- Loading ----------
 const LARGE_FILE = 2 * 1024 * 1024;
@@ -114,9 +145,8 @@ function loadBytes(fileName: string, bytes: Uint8Array) {
     raw = r;
     show(t, 0);
     player.setRate(autoRate(t.stats.duration));
-    followActive = settings.follow;
     map.fit(cardInset());
-    renderFollow();
+    setCamera(settings.camera);
   } catch (err) {
     console.error(err);
     toast(`Could not open ${fileName}: ${err instanceof Error ? err.message : String(err)}`, true);
@@ -145,11 +175,13 @@ function show(t: Track, pos: number) {
   info.show(true);
   $('chart-empty').hidden = true;
   $<HTMLButtonElement>('play-btn').disabled = false;
+  $<HTMLButtonElement>('export-btn').disabled = false;
   map.setTrack(t);
   chart.setTrack(t, settings.units);
   panel.setTrackInfo(t);
   renderTrackText();
   player.setTrack(t, pos);
+  exportPanel.refresh();
 }
 
 function renderTrackText() {
@@ -181,7 +213,7 @@ function renderTrackText() {
 function onPosition(force = false) {
   if (!track) return;
   const s = sampleAt(track, player.pos);
-  map.setProgress(s, player.playing, followActive && settings.follow);
+  map.setProgress(s, player.pos, player.rate, player.playing);
   chart.setPosition(player.pos);
   info.update(track, s, player.pos, settings.units, force || !player.playing);
   $('pos-time').textContent = hms(player.pos);
@@ -220,11 +252,19 @@ $('rates').addEventListener('click', (e) => {
 // ---------- Map controls ----------
 $('zoom-in').addEventListener('click', () => map.zoomBy(1));
 $('zoom-out').addEventListener('click', () => map.zoomBy(-1));
+// Stopped: fit the track and restore the chosen camera. Playing: next camera mode (§6.3).
 $('fit-btn').addEventListener('click', () => {
-  map.fit(cardInset());
-  followActive = settings.follow;
-  renderFollow();
+  if (!player.playing) {
+    setCamera(settings.camera);
+    map.fit(cardInset());
+    return;
+  }
+  const next = CAMERA_CYCLE[(CAMERA_CYCLE.indexOf(camMode) + 1) % CAMERA_CYCLE.length];
+  updateSettings({ camera: next });
+  setCamera(next);
+  panel.render();
 });
+$('export-btn').addEventListener('click', () => exportPanel.toggle());
 $('style-btn').addEventListener('click', () => ($('style-menu').hidden = !$('style-menu').hidden));
 $('style-menu').addEventListener('click', (e) => {
   const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-style]');
@@ -294,8 +334,9 @@ window.addEventListener('drop', (e) => {
 
 // ---------- Keyboard ----------
 document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && exportPanel.isOpen && $('settings').hidden) exportPanel.toggle(false);
   const tag = (e.target as HTMLElement).tagName;
-  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || !track) return;
+  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || !track || exportPanel.rendering) return;
   const step = (e.shiftKey ? 60 : 10) * 1000;
   switch (e.key) {
     case ' ':
@@ -320,6 +361,11 @@ document.addEventListener('keydown', (e) => {
     case '-':
       player.setRate(RATES[Math.max(0, RATES.indexOf(player.rate) - 1)]);
       break;
+    case 'e':
+    case 'E':
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      exportPanel.toggle();
+      break;
     default:
       return;
   }
@@ -328,5 +374,7 @@ document.addEventListener('keydown', (e) => {
 
 new ResizeObserver(() => map.resize()).observe($('map'));
 
+renderCamera();
+
 // Dev-only handle for debugging from the browser console.
-if (import.meta.env.DEV) Object.assign(window, { trackview: { player, map, chart, info } });
+if (import.meta.env.DEV) Object.assign(window, { trackview: { player, map, chart, info, exportPanel } });

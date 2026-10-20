@@ -26,3 +26,10 @@ export const BLANK_STYLE: StyleSpecification = {
   sources: {},
   layers: [{ id: 'background', type: 'background', paint: { 'background-color': '#eceee8' } }],
 };
+
+/** Attribution burned into exported videos; the tile licences require it (§13.5). */
+export const STYLE_ATTRIBUTION: Record<MapStyleId, string> = {
+  light: '© OpenFreeMap © OpenMapTiles Data from OpenStreetMap',
+  streets: '© OpenFreeMap © OpenMapTiles Data from OpenStreetMap',
+  satellite: 'Imagery © Esri, Maxar, Earthstar Geographics',
+};

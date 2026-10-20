@@ -1,14 +1,12 @@
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 import { indexAt } from '../model/interpolate';
+import { chartSeries, type ChartMode } from '../model/series';
 import type { Track } from '../model/types';
-import { distUnit, distValue, eleUnit, eleValue, hms, speedUnit, speedValue } from '../model/units';
+import { distUnit, distValue, hms } from '../model/units';
 import type { Units } from '../settings';
 
-const SMOOTH = 5; // moving-average window for display only
 const css = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-
-export type ChartMode = 'speed' | 'ele' | 'none';
 
 export interface ChartEvents {
   onSeek(pos: number): void;
@@ -66,22 +64,13 @@ export class SpeedChart {
     this.units = units;
     this.u?.destroy();
     this.u = null;
-    this.mode = !track ? 'none' : track.hasSpeed ? 'speed' : track.hasEle ? 'ele' : 'none';
-    this.unitLabel.textContent = this.mode === 'speed' ? speedUnit(units) : this.mode === 'ele' ? eleUnit(units) : '';
-    if (!track || this.mode === 'none') return;
+    const series = track ? chartSeries(track, units) : null;
+    this.mode = series ? series.mode : 'none';
+    this.unitLabel.textContent = series ? series.unit : '';
+    if (!track || !series || this.mode === 'none') return;
 
     const xs: number[] = Array.from(track.playT, (v) => v / 1000);
-    const raw = this.mode === 'speed' ? track.speed : track.ele;
-    const conv = this.mode === 'speed' ? (v: number) => speedValue(v, units) : (v: number) => eleValue(v, units);
-    const ys: number[] = new Array(track.n);
-    const half = Math.floor(SMOOTH / 2);
-    for (let i = 0; i < track.n; i++) {
-      let sum = 0, cnt = 0;
-      for (let k = Math.max(0, i - half); k <= Math.min(track.n - 1, i + half); k++) {
-        if (track.seg[k] === track.seg[i] && Number.isFinite(raw[k])) { sum += raw[k]; cnt++; }
-      }
-      ys[i] = cnt ? conv(sum / cnt) : NaN;
-    }
+    const ys = series.ys;
     const [dx, dy] = decimate(xs, ys, Math.max(200, this.host.clientWidth));
 
     const finite = dy.filter(Number.isFinite);

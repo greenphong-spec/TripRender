@@ -6,6 +6,11 @@
     "main"
   ],
   "permissions": [
-    "core:default"
+    "core:default",
+    "dialog:allow-save",
+    "fs:allow-open",
+    "fs:allow-write",
+    "fs:allow-seek",
+    "fs:allow-remove"
   ]
 }

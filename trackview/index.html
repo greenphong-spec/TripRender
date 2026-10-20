@@ -104,6 +104,9 @@
             <button type="button" data-rate="1200">×1200</button>
           </div>
         </div>
+        <button class="icon-btn export-btn" id="export-btn" type="button" title="Export video (E)" aria-label="Export video" disabled>
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="13" height="14" rx="2" /><path d="M16 10l5-3v10l-5-3z" /></svg>
+        </button>
         <div class="readout mono"><span id="pos-time">00:00:00</span> <span class="sep">/</span> <span id="dur-time">00:00:00</span></div>
         <div class="spacer"></div>
         <div class="stats" id="stats">
@@ -148,10 +151,146 @@
         <label class="row">Speed for estimated timing
           <select name="estimatedSpeed"><option value="derived">Derived</option><option value="hidden">Hidden</option></select>
         </label>
-        <label class="row check"><input type="checkbox" name="follow" /> Follow marker while playing</label>
+        <label class="row">Camera while playing
+          <select name="camera">
+            <option value="off">Off</option>
+            <option value="north">Follow, north up</option>
+            <option value="heading">Follow, heading up</option>
+            <option value="keep">Keep in view</option>
+          </select>
+        </label>
       </form>
+      <section class="mk-panel" id="marker-panel">
+        <h3>Position marker</h3>
+        <div class="mk-preview" id="mk-preview" title="Drop an image here to use it as the marker"></div>
+        <div class="chips" id="mk-kinds">
+          <button type="button" data-kind="dot">Dot</button>
+          <button type="button" data-kind="arrow">Arrow</button>
+          <button type="button" data-kind="icon">Icon</button>
+          <button type="button" data-kind="image">Image</button>
+        </div>
+        <div class="mk-icons" id="mk-icons"></div>
+        <div class="mk-image-row" id="mk-image-row">
+          <button type="button" class="btn small" id="mk-import">Import image…</button>
+          <button type="button" class="link" id="mk-remove">Remove image</button>
+          <input type="file" id="mk-file" accept=".png,.jpg,.jpeg,.webp,.svg" hidden />
+        </div>
+        <label class="row">Size <span class="mono" id="mk-size-v"></span>
+          <input type="range" id="mk-size" min="12" max="128" step="1" />
+        </label>
+        <div class="row" id="mk-color-row">Colour
+          <div class="swatches" id="mk-colors"><input type="color" id="mk-color" title="Custom colour" /></div>
+        </div>
+        <label class="row check"><input type="checkbox" id="mk-halo" /> Halo</label>
+        <label class="row">Rotation
+          <select id="mk-rotation">
+            <option value="rotate">Rotate with heading</option>
+            <option value="flip">Flip left/right</option>
+            <option value="fixed">Fixed</option>
+          </select>
+        </label>
+        <label class="row" id="mk-front-row">Image front points
+          <span class="inline">
+            <select id="mk-front"><option value="0">Up</option><option value="90">Right</option><option value="180">Down</option><option value="270">Left</option><option value="custom">Angle…</option></select>
+            <input type="number" id="mk-front-deg" min="0" max="359" step="1" aria-label="Angle in degrees" />
+          </span>
+        </label>
+        <button type="button" class="link" id="mk-reset">Reset marker</button>
+      </section>
       <dl class="set-info" id="file-details"></dl>
     </aside>
+
+    <aside class="drawer export" id="export" hidden>
+      <div class="set-head">
+        <h2>Export video</h2>
+        <button class="icon-btn" id="export-close" type="button" aria-label="Close export">
+          <svg class="ico" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg>
+        </button>
+      </div>
+      <div class="ex-body" id="ex-setup">
+        <div class="ex-preview" id="ex-preview"><canvas id="ex-preview-canvas"></canvas><span class="ex-preview-note" id="ex-preview-note">Preparing preview…</span></div>
+        <form class="ex-form" id="ex-form" onsubmit="return false">
+          <fieldset>
+            <legend>Speed</legend>
+            <div class="chips" id="ex-rates"></div>
+            <label class="row" id="ex-fit-row">Video length (min:sec)
+              <input type="text" name="targetSec" inputmode="numeric" />
+            </label>
+          </fieldset>
+          <fieldset>
+            <legend>Range</legend>
+            <div class="chips" id="ex-range">
+              <button type="button" data-range="all">Whole track</button>
+              <button type="button" data-range="custom">From / To</button>
+            </div>
+            <div class="ex-range-rows" id="ex-range-rows">
+              <label class="row">From <span class="inline"><input type="text" id="ex-from" class="mono" /><button type="button" class="link" data-use="from">Use current position</button></span></label>
+              <label class="row">To <span class="inline"><input type="text" id="ex-to" class="mono" /><button type="button" class="link" data-use="to">Use current position</button></span></label>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Camera</legend>
+            <label class="row">Mode
+              <select name="camera">
+                <option value="north">Follow, north up</option>
+                <option value="heading">Follow, heading up</option>
+                <option value="keep">Keep in view</option>
+                <option value="overview">Whole track</option>
+              </select>
+            </label>
+            <label class="row" id="ex-tilt-row">3D tilt <span class="mono" id="ex-tilt-v"></span>
+              <input type="range" name="tilt" min="0" max="60" step="5" />
+            </label>
+            <label class="row" id="ex-zoom-row">Zoom <span class="mono" id="ex-zoom-v"></span>
+              <input type="range" name="zoom" min="3" max="18" step="0.5" />
+              <span class="ex-ticks"><span>10 Region</span><span>12 City</span><span>14 Streets</span><span>16 Close</span></span>
+            </label>
+            <button type="button" class="link" id="ex-use-zoom">Use current map zoom</button>
+            <label class="row check" id="ex-intro-row"><input type="checkbox" name="intro" /> Intro: overview, then fly in</label>
+            <label class="row check" id="ex-outro-row"><input type="checkbox" name="outro" /> Outro: zoom out to overview</label>
+          </fieldset>
+          <fieldset>
+            <legend>Output</legend>
+            <label class="row">Resolution <select name="resolution" id="ex-resolution"></select></label>
+            <label class="row">Frame rate <select name="fps" id="ex-fps"></select></label>
+            <label class="row">Quality
+              <select name="quality"><option value="standard">Standard</option><option value="high">High</option></select>
+            </label>
+            <label class="row">Map style
+              <select name="mapStyle"><option value="current">Same as the map</option><option value="light">Light</option><option value="streets">Streets</option><option value="satellite">Satellite</option></select>
+            </label>
+          </fieldset>
+          <fieldset>
+            <legend>Overlays</legend>
+            <label class="row check"><input type="checkbox" name="infoCard" /> Info card</label>
+            <label class="row check"><input type="checkbox" name="chart" /> Speed chart strip</label>
+            <label class="row">Time shown
+              <select name="timeShown"><option value="both">Elapsed and clock time</option><option value="elapsed">Elapsed (00:00:00 →)</option><option value="clock">Clock time</option></select>
+            </label>
+            <label class="row">Title
+              <select name="title"><option value="off">Off</option><option value="file">File name</option><option value="custom">Custom text</option></select>
+            </label>
+            <label class="row" id="ex-title-row"><input type="text" name="titleText" placeholder="Title text" /></label>
+            <div class="ex-marker"><span class="ex-marker-img" id="ex-marker-img"></span> Position marker <button type="button" class="link" id="ex-marker-btn">Change marker…</button></div>
+          </fieldset>
+        </form>
+        <div class="ex-summary mono" id="ex-summary"></div>
+        <div class="ex-warn" id="ex-warn" hidden></div>
+        <button class="btn primary ex-go" id="ex-render" type="button">Render video</button>
+      </div>
+      <div class="ex-body" id="ex-progress" hidden>
+        <canvas class="ex-thumb" id="ex-thumb"></canvas>
+        <progress id="ex-bar" max="1" value="0"></progress>
+        <div class="ex-prog-text mono" id="ex-prog-text"></div>
+        <button class="btn" id="ex-cancel" type="button">Cancel</button>
+      </div>
+      <div class="ex-body" id="ex-done" hidden>
+        <p class="ex-done-text" id="ex-done-text"></p>
+        <button class="btn primary" id="ex-save" type="button">Save video</button>
+        <button class="btn" id="ex-back" type="button">Back to options</button>
+      </div>
+    </aside>
+    <div class="export-block" id="export-block" hidden></div>
 
     <div class="drop-overlay" id="drop-overlay" hidden><div>Drop GPX, KML or KMZ</div></div>
     <div class="toast" id="toast" hidden></div>

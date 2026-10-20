@@ -1,9 +1,9 @@
-# Trackview — Specification (v0.2)
+# Trackview — Specification (v0.3)
 
 A desktop GPS track viewer (web UI in a Tauri shell) that **replays** a recorded trip on a real online map,
 with a live info card and a speed chart synced to the map. Target look: `expected_UI.png`.
 
-Status: approved for implementation 2026-10-19. The decisions taken on the v0.1 open questions are in §12.
+Status: §1–§12 approved for implementation 2026-10-19 (decisions on the v0.1 open questions are in §12). §13 Video export approved 2026-10-20 (decisions in §13.10). §14 Position marker approved 2026-10-20 (decisions in §14.8).
 
 ---
 
@@ -168,7 +168,7 @@ Binary-search `playT` for the bracketing points i, i+1 and compute the fraction 
 - **Offline / tile failure**: the track, markers and chart still render on a plain background, with a small "Map tiles unavailable — offline?" notice. Playback keeps working.
 
 ### 6.2 Layers (top to bottom)
-1. Current-position marker: 10 px dot in accent red with a white ring and a 24 px soft halo (pulsing while playing). With course data, a small heading wedge.
+1. Current-position marker: by default the built-in **car** icon (§14.1), 24 px, accent red, rotating with the heading, with a soft halo (pulsing while playing). The alternative "Dot" type is a 10 px dot in accent red with a white ring and a 24 px soft halo, plus a small heading wedge when course data exists. Shape, image and size can be changed (§14).
 2. Waypoints: 8 px blue dots, with the name shown in a tooltip on hover or click.
 3. Start: 8 px green dot. End: 9 px black square.
 4. **Travelled path**: accent red `#D2401E`, 4 px, round joins.
@@ -179,7 +179,7 @@ Splitting is done by MapLibre `line-gradient` with `lineMetrics: true` on one Ge
 
 ### 6.3 Map controls (bottom-right, 44 px square white buttons)
 - Zoom in (+), zoom out (−).
-- **Fit / follow** (crosshair icon). One click fits the whole track. While playing, it toggles **follow mode**: the camera pans to keep the marker inside the middle 60 % of the view. Any manual pan cancels follow.
+- **Fit / follow** (crosshair icon). When stopped, one click fits the whole track. While playing, each click moves to the next **camera mode** (§13.4): Off → Follow north up → Follow heading up → Keep in view → Off. The button shows the active mode. "Keep in view" pans the camera to keep the marker inside the middle 60 % of the view. Any manual pan or rotate sets the mode to Off.
 - Style switcher (layers icon): Light / Streets / Satellite.
 - On file load: fit the track bounds with 60 px padding (plus room for the info card).
 
@@ -263,7 +263,8 @@ A right-side drawer (360 px; full width on a phone) opened from the header gear.
 | Pause threshold | 10 s – 30 min | 60 s |
 | Remove GPS spikes | on / off, plus the spike distance (10–500 m) | on, 50 m |
 | Speed for estimated timing | Derived / Hidden | Derived |
-| Follow marker while playing | on / off | on |
+| Camera while playing (§13.4) | Off / Follow north up / Follow heading up / Keep in view | Keep in view |
+| Position marker (§14) | Dot / Arrow / built-in icon / imported image; size; colour; rotation | Car icon, 24 px, accent red, rotate |
 
 The panel also shows read-only file info: format, producer (`creator`), timing mode, number of points and segments, and spike points removed.
 
@@ -275,7 +276,7 @@ With no file loaded: the map shows the default view (last viewed area, or Vietna
 - A `requestAnimationFrame` loop: `pos += (now − last) × rate`, clamped to `[0, duration]`. The frame delta is capped at 100 ms, so a background tab doesn't jump.
 - One `onPosition(pos)` event fans out to: the map marker and gradient, the info card (throttled to 100 ms), the chart cursor and the follow camera.
 - Seeking from the chart, keyboard or end-of-track goes through the same `seek(pos)` call.
-- Settings saved in `localStorage` (wrapped in try/catch; WebView2 keeps it between app launches): every setting in §7.7, plus the last playback rate and the last map view.
+- Settings saved in `localStorage` (wrapped in try/catch; WebView2 keeps it between app launches): every setting in §7.7 (including the camera mode and the position marker with its imported image), the last export options (§13.6), the last playback rate and the last map view.
 
 ## 9. Performance targets
 | Item | Target |
@@ -297,11 +298,13 @@ trackview/
     player.ts               playback clock + auto rate
     settings.ts             settings model + persistence
     parse/ xml.ts gpx.ts kml.ts index.ts   (own small XML parser; KMZ unzip in index.ts)
-    model/ types.ts geo.ts build.ts spikes.ts interpolate.ts units.ts
-    map/ trackmap.ts styles.ts
-    ui/ chart.ts infocard.ts settingspanel.ts
+    model/ types.ts geo.ts build.ts spikes.ts interpolate.ts units.ts series.ts (chart values, shared with the video)
+    map/ trackmap.ts styles.ts tracklayers.ts camera.ts marker.ts
+                            (track line layers shared with the export map; camera modes §13.4; position marker §14)
+    export/ presets.ts timeline.ts render.ts overlays.ts encode.ts exportpanel.ts   (video export §13)
+    ui/ chart.ts infocard.ts settingspanel.ts markerpanel.ts
     styles/ tokens.css app.css
-  test/ (Vitest) samples.test.ts spikes.test.ts
+  test/ (Vitest) samples.test.ts spikes.test.ts build.test.ts export.test.ts
   src-tauri/                Tauri 2 shell (Cargo.toml, tauri.conf.json, src/main.rs, icons/)
 ```
 
@@ -330,3 +333,210 @@ Tests run against the files in `example_GPSfiles/`:
 | 4 | Dashcam speed | Derived speed by default; can be set to Hidden in settings (§5.5). |
 | 5 | Satellite | Keep Esri World Imagery as the simple no-key option for personal use (§6.1). |
 | 6 | Delivery | Desktop app on Windows via **Tauri 2** now (§2); keep the code Android-ready for a later APK. |
+
+---
+
+## 13. Video export (v0.3)
+
+Render the replay of the loaded track to a video file: the map with the travelled/remaining path and the moving marker, with the info card and speed chart optionally burned in. Status: **approved 2026-10-20**; the decisions are in §13.10.
+
+### 13.1 How it works
+- Rendering is **offline, frame by frame**, not a screen recording. For each output frame the export computes the playback position, moves a dedicated off-screen map there, **waits until every tile in view has loaded**, then grabs the frame. The video is smooth and has no missing tiles however slow the PC or network is; rendering may take longer or shorter than the video itself.
+- The export uses its **own hidden MapLibre map**, sized to the output resolution with `pixelRatio` 1 and `preserveDrawingBuffer: true`. The visible map, the player and the rest of the UI are not touched (they are blocked behind the export dialog while it renders).
+- Each frame is composed on a 2D canvas at the output size (map canvas → start/end and position markers → overlays §13.5 → attribution), encoded with **WebCodecs `VideoEncoder`** (H.264) and muxed to **MP4** with **Mediabunny** (pure TS, no ffmpeg; check the current version on npm when implementing). WebCodecs exists in WebView2, Chrome and the Android WebView, so no native code is needed and the feature stays Android-friendly.
+- If H.264 is not supported (`VideoEncoder.isConfigSupported`), fall back to **VP9 in WebM**. If that also fails, export is disabled with an explanation.
+- Frames are fed with back-pressure (each frame waits for Mediabunny's `CanvasSource.add`, which waits for the encoder and the writer), so memory stays flat however long the video is.
+- Bitrate is passed as `new Quality({ bitrate })`. (A bare number is not a bitrate in Mediabunny: it made the H.264 check fail and produced ~12× larger files.)
+
+### 13.2 Playback speed (video time vs track time)
+The video covers the playback timeline `playT` (§5.4), so **Skip pauses** applies exactly as on screen: each collapsed pause takes 1 s of track time.
+
+| Option | Rate | Aug 31 GPX (3 h 28 min moving) | Dashcam KMZ (38 min) |
+|---|---|---|---|
+| **Realtime** | ×1 | 3 h 28 min video | 38 min |
+| ×2 | ×2 | 1 h 44 min | 19 min |
+| ×4 | ×4 | 52 min | 9 min 34 s |
+| ×10 (default) | ×10 | 20 min 50 s | 3 min 50 s |
+| ×30 | ×30 | 6 min 56 s | 1 min 17 s |
+| ×60 | ×60 | 3 min 28 s | 38 s |
+| **Fit to duration** | track duration ÷ target | target 60 s → ×208 | 60 s → ×38 |
+
+- The preset list (rates, labels and the default) is **one constant in one file** (`src/export/presets.ts`), so presets can be added, removed or re-ordered later without touching the dialog or the renderer. The dialog builds its chips from that list.
+
+- **Realtime is the slowest option**: there is no slow motion. "Fit to duration" takes 10 s up to the track duration (mm:ss input); a longer target is clamped to realtime.
+- Before rendering, the dialog shows the resulting **rate, video length, frame count and estimated file size**. If the video would be longer than 30 min it warns ("3 h 28 min video, ~12 GB — consider ×10 or Fit to duration") but still allows it.
+- **Range**: whole track (default) or **From / To** on the playback timeline. "Use current position" buttons fill From/To from the player, so part of a trip can be picked by scrubbing the chart.
+
+### 13.3 Zoom
+- **Zoom level** slider 3–18 (MapLibre zoom), default **14** (about 2–3 km across a 1920 px frame; streets readable). Slider labels: 10 "Region", 12 "City", 14 "Streets", 16 "Close".
+- "Use current map zoom" copies the zoom of the visible map.
+- The zoom is fixed for the whole video, except:
+  - **Intro** (default on): 2 s on the whole-track overview, then a 1.5 s fly-in to the chosen zoom at the start point.
+  - **Outro** (default on): a 1.5 s zoom-out to the overview at the end, held for 2 s.
+- Zoom does not apply to the "Whole track" camera mode (§13.4).
+
+### 13.4 Camera — tracking the vehicle
+| Mode | Behaviour |
+|---|---|
+| **Follow, north up** (default) | The marker stays at the frame centre and the map moves under it. North is up. |
+| **Follow, heading up** | The marker sits at 65 % of the frame height (more road ahead is visible) and the map rotates so the direction of travel points up. Optional **3D tilt** 0–60° (default 0). |
+| **Keep in view** | The camera only pans when the marker leaves the middle 60 % of the frame (the on-screen follow rule, §6.3). Less motion. |
+| **Whole track** | Static camera fitted to the track (or the selected range) with 8 % padding. Only the marker and the path colours change. |
+
+- Camera motion is **smoothed in video time**, not track time, so it looks the same at every rate. Because the whole track is known in advance, the smoothing is an average over a window **centred** on the position (no lag, unlike a time-constant filter, which would leave the camera kilometres behind at ×200): position over ±0.3 s of video, bearing (as unit vectors) over ±1.0 s. Near a segment end the window shrinks equally on both sides, so the average stays on the marker.
+- Bearing for heading-up: recorded course if present, otherwise the bearing over the next ~30 m of track (avoids jitter at 1 Hz sampling). Below 3 km/h the bearing is held, so the map does not spin while stopped.
+- At a segment break (marker jump) the camera cuts instead of panning.
+
+**On-screen use:** the same modes (except Whole track) replace the old follow on/off toggle in the live viewer. §7.7 "Camera while playing" picks the mode (Off / Follow north up / Follow heading up / Keep in view; default Keep in view, matching the old behaviour), and the fit/follow button (§6.3) cycles through them. The camera code is shared (`src/map/camera.ts`), so what you see while playing is what the video shows. The old `follow: boolean` setting migrates to Keep in view (true) or Off (false).
+
+### 13.5 Output and overlays
+| Option | Choices | Default |
+|---|---|---|
+| Resolution | 1280×720 · 1920×1080 · 3840×2160 (if the encoder supports it) · 1080×1920 vertical (phone) · 1080×1080 square | 1920×1080 |
+| Frame rate | 30 / 60 fps | 30 |
+| Quality | Standard (8 Mbps at 1080p30) / High (16 Mbps); scaled by pixel count and fps | Standard |
+| Map style | Light / Streets / Satellite | the current style |
+| Info card | on / off — the §7.2 card (time, speed, distance, elevation, position), top-left | on |
+| Speed chart strip | on / off — the §7.4 chart with travelled shading and cursor, along the bottom 16 % of the frame | on |
+| Title | off / file name / custom text, top-centre | off |
+| Time shown | elapsed (00:00:00 →) / real clock time / both | both (as in the app) |
+
+- Overlays are drawn straight onto the canvas with the app's tokens (§7.5) and fonts, scaled by the frame's shorter side ÷ 1080 (so a vertical 1080×1920 frame uses the 1080 p sizes). They are not DOM screenshots.
+- In the follow modes the camera keeps the marker centred in the map area **above** the chart strip; the whole-track overview also leaves room for the info card.
+- The **map attribution** ("© OpenFreeMap © OpenMapTiles Data from OpenStreetMap", or the Esri line for satellite) is always drawn bottom-right and cannot be turned off; the tile licences require it.
+- Units follow the app setting (§7.7).
+
+### 13.6 Dialog and flow
+1. An **Export video** button (film icon) in the playback bar next to the speed chips; disabled with no track. Shortcut `E`.
+2. The dialog is a right drawer like Settings (full screen on a phone). It holds §13.2–§13.5 plus a **live preview**: a small frame at the output aspect ratio showing the current position with the chosen camera, zoom and overlays, updated as options change.
+3. **Render** → progress view: frame `n / N`, percent, elapsed and remaining time, and a thumbnail of the latest frame. **Cancel** stops at once and discards the output.
+4. When done: **Save**. In the desktop app, a native Save As dialog (Tauri `plugin-dialog` + `plugin-fs`); in the browser, a normal download. Suggested name `<track name>_<rate>_<resolution>.mp4`, e.g. `Aug_31_2026_x10_1080p.mp4` or `…_60s_1080p.mp4`.
+5. The last used export options are saved with the other settings (§8).
+
+### 13.7 Robustness
+- **Tile wait** per frame: up to 10 s for the map to become idle; after that the frame is rendered with whatever has loaded, and the end screen reports "12 frames rendered with missing tiles". Offline, export still works on the plain background (§6.1) after a warning.
+- The wait draws the map (`map.redraw()`, synchronous) once to request the tiles, then waits on map `data`/`error` events **without drawing** until all tiles and sources are loaded, then draws once more. Drawing on every event cost ~25 draws per frame.
+- Raster fade (`raster-fade-duration`) and symbol fade (`fadeDuration`) are 0 on the export map, so every frame shows fully drawn tiles.
+- Track data stays local; only tile requests go to the network, as in the viewer.
+- Memory: at most ~10 frames in flight. In the desktop app the encoded output streams to the chosen file (Mediabunny stream target → Tauri fs), so the Save As dialog comes **before** rendering there. The browser build buffers in memory and warns above ~2 GB.
+- The export loop is a promise chain, not `requestAnimationFrame`, so it keeps going while the window is minimised or in the background.
+
+### 13.8 Performance targets
+| Item | Target |
+|---|---|
+| Render speed, 1080p30, tiles cached | ≥ 30 frames/s on a mid-range laptop (render at least as fast as the video plays) |
+| Render speed, tiles not cached | network-bound; the first Aug 31 export at ×10 (37.5k frames) under 30 min |
+| Extra memory during export | < 500 MB, independent of video length |
+
+Measured 2026-10-20 on the development PC, whose browser has no GPU driver (WebGL runs on "Microsoft Basic Render Driver", i.e. the CPU): about 0.5 s per 1080p frame with tiles cached, most of it reading the WebGL frame back. A PC with a working GPU driver is expected to be much faster.
+
+### 13.9 Acceptance criteria
+1. **Apr 15 KML, Realtime, 1080p30, Follow north up, zoom 16**: a 2 min MP4 (± 1 frame, plus intro/outro if on) that plays in Windows Media Player / Films & TV and VLC. The marker is centred in every frame; no blank tiles with the network on.
+2. **Aug 31 GPX, Fit to duration 60 s**: the video lasts 60 s plus intro/outro, the dialog shows ×208, the 11 h 47 min pause takes 1 s of track time, and at segment breaks the camera cuts.
+3. **Heading up** on the Aug 24 KML: the direction of travel points up, and the map does not spin while the vehicle is stopped.
+4. **Whole track**: the camera never moves, and the whole track (or the selected range) is visible.
+5. **Range**: From/To taken from chart positions gives a video starting and ending at those positions.
+6. **Overlays**: info card values in a frame equal the app's info card at the same position; the attribution is visible in every frame.
+7. **Cancel** stops within 1 s and leaves no file. Export does not change the visible map, the player position or any setting except the saved export options.
+8. **Vertical 1080×1920** output works, with the overlays laid out for portrait.
+9. **Dashcam KMZ** (estimated time) exports with the "Estimated time" badge in the info card.
+10. Unit tests (no MapLibre needed): frame index → playback position (rate, fit-to-duration, range, intro/outro) and the camera smoothing.
+
+### 13.10 Decisions (answered 2026-10-20)
+| # | Question | Decision |
+|---|---|---|
+| 1 | Speed range | Realtime is the **slowest** speed (no slow motion). Presets ×1, ×2, ×4, ×10, ×30, ×60 plus Fit to duration. The preset list is a single constant that is easy to change later (§13.2). |
+| 2 | Default rate | ×10 |
+| 3 | Camera modes in the live viewer | Yes: they replace the follow toggle, with shared code (§13.4, §6.3) |
+| 4 | Info card and speed chart in the video | Both on by default |
+| 5 | Default resolution / frame rate | 1920×1080, 30 fps |
+| 6 | Intro/outro overview shots | On by default |
+| 7 | Audio | None (silent video) |
+| 8 | Range | Whole track by default; From/To range available |
+
+---
+
+## 14. Position marker (v0.3)
+
+The moving marker that shows the vehicle's current position can be changed: its shape, an imported image, its size and how it rotates. The same marker is used on the live map and in exported videos (§13), drawn by one shared module (`src/map/marker.ts`).
+
+### 14.1 Marker types
+| Type | Look | Rotates with heading |
+|---|---|---|
+| **Dot** | The v0.1 marker (§6.2): coloured dot, white ring, halo, small heading wedge when course is known | wedge only |
+| **Arrow** | A navigation arrow (chevron shape) in the marker colour with a white outline and soft shadow | yes (default) |
+| **Built-in icon** (default: car) | A small bundled SVG set: car (the default icon), motorbike, bicycle, walker, truck, boat. Top-down drawings so that rotating them looks natural | yes (default) |
+| **Imported image** | A PNG, JPG, WebP or SVG file chosen by the user (e.g. a photo of their own car or a logo) | per §14.3 |
+
+### 14.2 Size and colour
+- **Size** slider 12–128 px, default **24 px** (the marker's longest side; images keep their aspect ratio). The Dot's diameter is 0.75 × the size (24 px → the v0.1 18 px dot). On the live map the size is in CSS pixels. In video it is defined for 1080 p and scaled with the output height (48 px at 2160 p).
+- **Colour** (Dot, Arrow, built-in icons): accent red `#D2401E` by default; a small palette (red, teal, blue, green, black, white) plus a custom colour picker. Imported images keep their own colours.
+- **Halo** on/off (default on): the soft pulsing halo behind the marker. For images it is a soft circular shadow, so the image stands out on satellite maps.
+
+### 14.3 Rotation
+| Option | Behaviour |
+|---|---|
+| **Rotate with heading** | The marker turns so its front points in the direction of travel. |
+| **Flip left/right** | The image is never rotated, only mirrored so it faces left when travelling west and right when travelling east. Meant for side-view pictures (a car seen from the side), which look wrong when rotated. |
+| **Fixed** | Never rotated or flipped. |
+
+- Default: Rotate for Arrow and built-in icons; Fixed for imported images.
+- **"Image front points"** (imported images only): Up / Right / Down / Left, or an angle 0–359°. It tells the app which way the picture faces, so a car photo facing right still drives forward. Default Up.
+- Heading uses the same smoothing as the heading-up camera (§13.4): recorded course if present, else bearing over the next ~30 m, held below 3 km/h, averaged over a centred window of ±0.5 s of video (shorter than the camera's ±1.0 s, so the icon follows turns more closely). So the icon does not twitch on 1 Hz data or spin while stopped.
+- In **Follow heading up** camera mode the map rotates instead, so a rotating marker effectively points straight up all the time; this is expected.
+- Rotation is relative to the map: when the map is rotated by the user or the camera, the marker still points along the road.
+
+### 14.4 Importing an image
+- **Import image…** button in the marker settings; the image file can also be dropped onto the marker preview. The file picker accepts `.png .jpg .jpeg .webp .svg`.
+- Limit: 5 MB per file. On import the image is **scaled down to at most 256 px** on its longest side and stored as a PNG data URL in the settings (§8), so it survives restarts. SVGs are rasterised the same way.
+- SVGs are only ever loaded through an `<img>`/`ImageBitmap` (never inserted into the page as markup), so scripts inside an SVG cannot run.
+- An unreadable or oversized file shows an error toast and keeps the current marker.
+- One imported image is kept at a time; importing a new one replaces it. "Remove image" goes back to the previous non-image type.
+- The CSP needs `img-src data: blob:` for the stored image (check `tauri.conf.json`).
+
+### 14.5 Settings UI
+A **Position marker** group in the settings panel (§7.7):
+- A live **preview** on a small map-coloured tile, showing the marker moving in a circle so rotation can be checked.
+- Type chips: Dot · Arrow · Icon (opens the built-in icon grid) · Image.
+- Size slider with the value in px, colour palette, Halo toggle, Rotation (Rotate / Flip / Fixed), and "Image front points" for imported images.
+- **Reset marker** returns to the default (car icon, 24 px, accent red, Rotate, halo on).
+- The video export dialog (§13.6) shows the current marker and has a link "Change marker…" that opens this group. There are no separate marker settings for video.
+
+Settings shape (one key in `localStorage`, §8):
+```ts
+marker: {
+  kind: 'dot' | 'arrow' | 'icon' | 'image';   // default 'icon' (car)
+  icon: 'car' | 'motorbike' | 'bicycle' | 'walker' | 'truck' | 'boat';   // default 'car'
+  sizePx: number;          // 12–128, default 24
+  color: string;           // '#D2401E'
+  halo: boolean;           // true
+  rotation: 'rotate' | 'flip' | 'fixed';
+  imageFrontDeg: number;   // 0 = up, 90 = right
+  imageDataUrl: string | null;
+}
+```
+
+### 14.6 Rendering
+- Live map: the marker stays an HTML `Marker` (§6.2 layer 1). Rotation and flip are a CSS `transform` on the picture inside it, using the screen angle (travel bearing − map bearing), so the marker follows map rotation. Only the transform changes per frame; the element is rebuilt only when the settings change.
+- Built-in shapes are inline SVG strings in `marker.ts` with a tight viewBox and the front pointing up.
+- Video: the same image is drawn on the frame canvas with `drawImage` from an `ImageBitmap` prepared once at the output scale.
+- Start, end and waypoint markers are not affected.
+
+### 14.7 Acceptance criteria
+1. Each type (Dot, Arrow, each built-in icon, an imported PNG and SVG) shows on the live map and in an exported video at the chosen size.
+2. **Size**: at 64 px the marker measures 64 px on screen (longest side) and 64 px in a 1080p video frame, 128 px at 2160p.
+3. **Rotate**: on the Aug 24 KML the arrow points along the track at every moment of the replay and does not spin while stopped.
+4. **Flip**: a right-facing side-view image faces left on west-bound parts and right on east-bound parts, and is never upside down.
+5. **Image front points = Right**: a right-facing image in Rotate mode drives forward.
+6. The imported image survives an app restart. A 10 MB file or a renamed text file is rejected with a toast.
+7. An SVG containing a `<script>` is displayed without running the script.
+8. Changing the marker during playback does not interrupt playback.
+9. On a fresh install (no saved settings) the marker is the car icon, 24 px, accent red, rotating with the heading.
+
+### 14.8 Decisions (answered 2026-10-20)
+| # | Question | Decision |
+|---|---|---|
+| 1 | Built-in icon set | Car, motorbike, bicycle, walker, truck, boat. **Car** is the default icon (pre-selected when the Icon type is chosen). |
+| 2 | Default marker | The **car** icon (changed 2026-10-20 from the dot); Dot and Arrow remain available |
+| 3 | Imported images | One at a time; a library can come later |
+| 4 | Separate markers for live map and video | No: one setting for both |
