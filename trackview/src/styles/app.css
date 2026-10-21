@@ -70,12 +70,25 @@ button { font: inherit; color: inherit; }
 .info-card.collapsed .ic-collapse svg { transform: rotate(180deg); }
 
 .map-ctrls { position: absolute; right: 24px; bottom: 24px; z-index: 2; display: flex; flex-direction: column; gap: 8px; }
-.zoom-level {
-  align-self: center; min-width: 44px; padding: 3px 6px; cursor: pointer;
+.zoom-box { align-self: flex-end; display: flex; align-items: stretch; gap: 2px; }
+.zoom-level, .zoom-copy {
+  padding: 3px 6px; cursor: pointer;
   background: var(--surface); border: 1px solid var(--border-strong); border-radius: 6px; box-shadow: var(--shadow);
   font-size: 12px; color: var(--text); white-space: nowrap;
 }
-.zoom-level:hover { background: #f7f8f6; }
+.zoom-level { min-width: 44px; }
+.zoom-level.auto { color: var(--primary); border-color: var(--primary); font-weight: 600; }
+.zoom-copy { display: grid; place-items: center; padding: 2px 4px; color: var(--text-muted); }
+.zoom-copy .ico { width: 13px; height: 13px; }
+.zoom-level:hover, .zoom-copy:hover { background: #f7f8f6; }
+.sz-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+.sz-grid input[type='number'] { width: 100%; font: 14px var(--font); color: var(--text); padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: 7px; background: #fff; }
+.sz-grid input.invalid { border-color: #c0392b; box-shadow: 0 0 0 1px #c0392b; }
+.sz-grid i { font-style: normal; }
+.sz-hint { font-size: 11px; color: var(--text-faint); }
+.sz-fields { display: flex; flex-direction: column; gap: 8px; }
+.sz-fields > .link { align-self: flex-start; padding: 0; }
+.sz-panel .row.check.disabled { color: var(--text-faint); }
 .map-btn {
   width: 44px; height: 44px; display: grid; place-items: center; cursor: pointer;
   background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: var(--shadow); color: var(--text);

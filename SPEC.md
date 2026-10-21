@@ -1,9 +1,9 @@
-# Trackview — Specification (v0.3)
+# Trackview — Specification (v0.4)
 
 A desktop GPS track viewer (web UI in a Tauri shell) that **replays** a recorded trip on a real online map,
 with a live info card and a speed chart synced to the map. Target look: `expected_UI.png`.
 
-Status: §1–§12 approved for implementation 2026-10-19 (decisions on the v0.1 open questions are in §12). §13 Video export approved 2026-10-20 (decisions in §13.10). §14 Position marker approved 2026-10-20 (decisions in §14.8).
+Status: §1–§12 approved for implementation 2026-10-19 (decisions on the v0.1 open questions are in §12). §13 Video export approved 2026-10-20 (decisions in §13.10). §14 Position marker approved 2026-10-20 (decisions in §14.8). §15 Smart zoom approved 2026-10-21 (decisions in §15.8).
 
 ---
 
@@ -178,7 +178,7 @@ Binary-search `playT` for the bracketing points i, i+1 and compute the fraction 
 Splitting is done by MapLibre `line-gradient` with `lineMetrics: true` on one GeoJSON line per segment, updating the gradient stop at the current progress each frame. This is cheap and avoids rebuilding geometry. If perf tests show this is too slow, fall back to updating a "travelled" source with a sliced coordinate array at a throttled 15 Hz.
 
 ### 6.3 Map controls (bottom-right, 44 px square white buttons)
-- **Zoom readout** above the buttons: the current map zoom with one decimal ("z 14.2"), updated live while zooming. Clicking it copies the number to the clipboard (toast "Zoom 14.2 copied"), so it can be reused later, e.g. typed into Export video → Zoom (§13.3, which also has "Use current map zoom").
+- **Zoom readout** above the buttons: the current map zoom with one decimal ("z 14.2"; "z 15.2 auto" while Smart zoom drives it, §15), updated live while zooming. Clicking the readout toggles Smart zoom on/off (§15.5). A small copy icon next to it copies the number to the clipboard (toast "Zoom 14.2 copied"), so it can be reused later, e.g. typed into Export video → Zoom (§13.3, which also has "Use current map zoom").
 - Zoom in (+), zoom out (−).
 - **Fit / follow** (crosshair icon). When stopped, one click fits the whole track. While playing, each click moves to the next **camera mode** (§13.4): Off → Follow north up → Follow heading up → Keep in view → Off. The button shows the active mode. "Keep in view" pans the camera to keep the marker inside the middle 60 % of the view. Any manual pan or rotate sets the mode to Off.
 - Style switcher (layers icon): Light / Streets / Satellite.
@@ -265,6 +265,7 @@ A right-side drawer (360 px; full width on a phone) opened from the header gear.
 | Remove GPS spikes | on / off, plus the spike distance (10–500 m) | on, 50 m |
 | Speed for estimated timing | Derived / Hidden | Derived |
 | Camera while playing (§13.4) | Off / Follow north up / Follow heading up / Keep in view | Keep in view |
+| Smart zoom (§15) | on / off, plus Near zoom, Far zoom, slow and fast speed (text inputs) | off; 17 / 13; speeds from the track average (½× / 2×) |
 | Position marker (§14) | Dot / Arrow / built-in icon / imported image; size; colour; rotation | Car icon, 24 px, accent red, rotate |
 
 The panel also shows read-only file info: format, producer (`creator`), timing mode, number of points and segments, and spike points removed.
@@ -300,12 +301,12 @@ trackview/
     settings.ts             settings model + persistence
     parse/ xml.ts gpx.ts kml.ts index.ts   (own small XML parser; KMZ unzip in index.ts)
     model/ types.ts geo.ts build.ts spikes.ts interpolate.ts units.ts series.ts (chart values, shared with the video)
-    map/ trackmap.ts styles.ts tracklayers.ts camera.ts marker.ts
-                            (track line layers shared with the export map; camera modes §13.4; position marker §14)
+    map/ trackmap.ts styles.ts tracklayers.ts camera.ts marker.ts smartzoom.ts
+                            (track line layers shared with the export map; camera modes §13.4; position marker §14; smart zoom §15)
     export/ presets.ts timeline.ts render.ts overlays.ts encode.ts exportpanel.ts   (video export §13)
-    ui/ chart.ts infocard.ts settingspanel.ts markerpanel.ts
+    ui/ chart.ts infocard.ts settingspanel.ts markerpanel.ts smartzoomfields.ts (§15.2 inputs, used in settings and export)
     styles/ tokens.css app.css
-  test/ (Vitest) samples.test.ts spikes.test.ts build.test.ts export.test.ts
+  test/ (Vitest) samples.test.ts spikes.test.ts build.test.ts export.test.ts smartzoom.test.ts
   src-tauri/                Tauri 2 shell (Cargo.toml, tauri.conf.json, src/main.rs, icons/)
 ```
 
@@ -541,3 +542,90 @@ marker: {
 | 2 | Default marker | The **car** icon (changed 2026-10-20 from the dot); Dot and Arrow remain available |
 | 3 | Imported images | One at a time; a library can come later |
 | 4 | Separate markers for live map and video | No: one setting for both |
+
+---
+
+## 15. Smart zoom while playing (v0.4)
+
+While playing, the camera keeps the vehicle **in the centre of the map** and changes the **zoom with the speed**: slow (city streets, stops, junctions) → zoomed in, close to the vehicle; fast (highway) → zoomed out, so more of the route ahead is visible. Status: **approved 2026-10-21**; the decisions are in §15.8.
+
+### 15.1 Where it applies
+- An on/off option **Smart zoom** next to "Camera while playing" (§7.7), default **off**; once turned on it stays on (saved, §8).
+- It works with the two centred camera modes, **Follow north up** and **Follow heading up** (§13.4). Turning Smart zoom on while the camera is Off or Keep in view switches the camera to Follow north up, because the vehicle must stay centred.
+- Everything else of the follow modes stays as is: centre smoothing, heading-up rotation, camera cut at segment breaks.
+- The same settings drive the video export (§15.6).
+
+### 15.2 Speed → zoom, based on the track's average speed
+The target zoom comes from the vehicle's speed through a curve between a **Near zoom** (slow end) and a **Far zoom** (fast end). Where the curve sits is taken from the loaded track's **average moving speed** (§5.5), so a city walk and a highway ride both use the whole zoom range:
+
+| | Slow speed (→ Near zoom) | Average speed (→ middle zoom) | Fast speed (→ Far zoom) |
+|---|---|---|---|
+| Default rule | ½ × average | average | 2 × average |
+| Default zoom | **17** "Close" | 15 | **13** |
+| Aug 31 GPX (avg 43.4 km/h) | 22 km/h | 43 km/h | 87 km/h |
+| Dashcam KMZ (avg 35.2 km/h) | 18 km/h | 35 km/h | 70 km/h |
+| Aug 24 KML (avg 15.8 km/h) | 8 km/h | 16 km/h | 32 km/h |
+
+- Below the slow speed the zoom is the Near zoom; above the fast speed it is the Far zoom. In between it is interpolated over **log(speed)**, so the average speed falls exactly on the middle zoom.
+- Speeds are rounded to whole km/h (mph in Imperial). The slow speed is at least 5 km/h.
+- Map width for reference (1440 px map at 11° N): zoom 17 ≈ 0.85 km, 15 ≈ 3.4 km, 13 ≈ 13.5 km.
+
+**Editable values.** The four values are **text inputs** (number fields) in the Smart zoom group of the settings panel and in the export dialog (§15.6), showing the values in use:
+
+| Field | Default | Range |
+|---|---|---|
+| Near zoom | 17 | 3–20, one decimal |
+| Far zoom | 13 | 3–20, one decimal, below Near zoom |
+| Slow speed | **Auto** = ½ × the track average | 1–300 km/h, below Fast speed |
+| Fast speed | **Auto** = 2 × the track average | 2–400 km/h |
+
+- While the speeds are on Auto, the fields show the computed values with an "auto" hint ("22 km/h · auto from avg 43.4"). Typing a value switches that field to custom; a **"Use track average"** link puts both speeds back on Auto.
+- Custom values and both zoom levels are saved (§8) and apply to every track until reset. Auto values are recomputed for each loaded track.
+- Invalid input (empty, out of range, slow ≥ fast, far ≥ near) is not applied: the field shows a red outline and keeps the last valid value.
+- The zoom readout (§6.3) shows the live value with "auto": "z 15.2 auto".
+
+### 15.3 Which speed
+- The speed fed into the curve is the **smoothed** track speed, averaged over a window centred on the position (like the camera smoothing, §13.4), but longer: ±8 s of screen/video time. One-second dips (a pothole brake, GPS noise) do not move the zoom.
+- Because the window is measured in screen/video time, it spans more of the track at high rates (×60: ±8 min of driving). Then the zoom follows the longer-term speed and short stops do not zoom in; this is intended (no pumping). Checked on Aug 31: at ×10 the zoom moves smoothly between 13.0 and 14.5 through a town section; at ×60 it stays about 13.2.
+- **Look-ahead**: the window is shifted 2 s of screen/video time forward, so the zoom starts to widen *before* the vehicle speeds up onto a highway and closes in before it slows into a junction.
+- Collapsed pauses and stops (speed below 3 km/h, §13.4): the zoom eases to the Near zoom and holds.
+- Tracks without speed (untimed, or "Hidden" estimated speed, §5.5): Smart zoom is unavailable; the option is disabled with the tooltip "Needs speed data".
+
+### 15.4 Playback rate and keeping it calm
+- **Rate widening**: at high rates the speed curve alone would make the map scroll too fast (at ×120 a car at 60 km/h covers 2 km per screen second). So the zoom is also limited so that the vehicle moves at most **½ of the map width per second** on screen: target = min(curve zoom, rate-limited zoom). This only ever zooms further **out**, never closer than the curve.
+- **Rate limit**: the zoom changes by at most **0.5 zoom level per second** of screen time (one level = map scale ×2), with ease-in/out, so the map never "pumps".
+- **Dead band**: changes smaller than 0.25 zoom level are ignored.
+- Zoom changes continuously (fractional zoom), never in jumps; tiles of the neighbouring level are shown while the next ones load.
+- Seeking (chart, keyboard) or changing the playback rate while playing: the zoom jumps straight to the target at the new position, no animation.
+
+### 15.5 Manual control
+- **Zoom readout click** (§6.3) toggles Smart zoom on/off from the map; the copy function moves to a small copy icon next to the readout.
+- Mouse wheel, pinch or the +/− buttons **do not turn Smart zoom off**. They shift the whole curve by the change (an offset, e.g. +1 = everything one level closer). The offset is kept until the next file load or a click on the fit button, and is not saved.
+- Dragging the map still turns the camera Off (§6.3), and Smart zoom with it, until the next fit or file load.
+
+### 15.6 Video export
+- The export camera (§13.4) gets **Zoom: Fixed / Smart**. With Smart, the Zoom slider (§13.3) is replaced by the same four text inputs (Near zoom, Far zoom, Slow speed, Fast speed, with Auto and "Use track average"). They are the **same saved values** as in the settings panel: editing them in either place changes both, so what plays on screen is what the video shows.
+- In the video, §15.3–§15.4 timing is measured in video seconds and the rate widening uses the output frame width, so it looks the same at every rate and resolution.
+- With a From/To range (§13.2), Auto speeds still come from the whole track's average.
+- Intro/outro (§13.3) fly in to / out from the smart zoom at the start / end point.
+- "Whole track" camera: Smart zoom does not apply (the option is hidden).
+
+### 15.7 Acceptance criteria
+1. **Aug 31 GPX**, Smart zoom on, Auto speeds (22 / 87 km/h), ×10: in town at ~30 km/h the map shows about zoom 16; on the expressway at ~100 km/h zoom 13; the vehicle stays centred all the time.
+2. At ×240 on the same track the view is wider than at ×10 (rate widening), and the vehicle never crosses more than half the map width per second.
+3. The zoom never changes faster than 0.5 level per second, and does not change for a 2 s brake.
+4. While stopped (dashcam KMZ: 355 duplicate points), the zoom settles at the Near zoom and holds.
+5. Typing Slow speed 40 / Fast speed 120 is applied at once and saved; "Use track average" restores 22 / 87 on Aug 31. Slow 90 / Fast 80 is rejected with a red outline.
+6. Values edited in the export dialog show up in the settings panel and vice versa; a Smart-zoom video of Aug 31 at ×60 zooms out on the expressway and in through town.
+7. Mouse-wheel zoom during playback shifts the zoom and keeps following; a drag turns the camera off; clicking the zoom readout toggles "auto".
+8. Untimed 52100 KMZ: the option is disabled with "Needs speed data".
+9. Unit tests (no MapLibre): average → Auto speeds, speed → zoom curve, rate widening, rate limit, dead band and look-ahead.
+
+### 15.8 Decisions (answered 2026-10-21)
+| # | Question | Decision |
+|---|---|---|
+| 1 | Speed → zoom range | Based on the track's **average speed** (slow = ½×, fast = 2× the average; zoom 17 → 13), with **text inputs** to edit Near/Far zoom and Slow/Fast speed, shared with the video export (§15.2, §15.6) |
+| 2 | Playback rate widens the view | Yes: zoom out further so the vehicle moves at most ½ map width per second; never closer than the speed curve (§15.4) |
+| 3 | Default | Off (opt-in); remembered once turned on |
+| 4 | Video export | Yes, "Zoom: Fixed / Smart" with the same values (§15.6) |
+| 5 | Quick access | Click the zoom readout to toggle; copy moves to a copy icon next to it (§6.3, §15.5) |

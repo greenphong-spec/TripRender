@@ -23,6 +23,15 @@ export interface MarkerSettings {
   imageDataUrl: string | null;
 }
 
+/** Smart zoom (§15): zoom from speed between a near and a far zoom. Null speeds = Auto from the track average. */
+export interface SmartZoomSettings {
+  enabled: boolean;
+  near: number;
+  far: number;
+  slowKmh: number | null;
+  fastKmh: number | null;
+}
+
 /** Video export options (§13); From/To are per track and not saved. */
 export interface ExportOptions {
   rateMode: 'preset' | 'fit';
@@ -31,6 +40,7 @@ export interface ExportOptions {
   camera: VideoCamera;
   tilt: number;
   zoom: number;
+  zoomMode: 'fixed' | 'smart';
   intro: boolean;
   outro: boolean;
   resolution: string; // id in RESOLUTIONS
@@ -53,6 +63,7 @@ export interface Settings {
   spikeDistanceM: number;
   estimatedSpeed: 'derived' | 'hidden';
   camera: CameraMode;
+  smart: SmartZoomSettings;
   marker: MarkerSettings;
   export: ExportOptions;
   rate: number;
@@ -64,6 +75,14 @@ export type BuildSettings = Pick<
   Settings,
   'skipPauses' | 'pauseThresholdSec' | 'removeSpikes' | 'spikeDistanceM' | 'estimatedSpeed'
 >;
+
+export const DEFAULT_SMART: SmartZoomSettings = {
+  enabled: false,
+  near: 17,
+  far: 13,
+  slowKmh: null,
+  fastKmh: null,
+};
 
 export const DEFAULT_MARKER: MarkerSettings = {
   kind: 'icon',
@@ -83,6 +102,7 @@ export const DEFAULT_EXPORT: ExportOptions = {
   camera: 'north',
   tilt: 0,
   zoom: 14,
+  zoomMode: 'fixed',
   intro: true,
   outro: true,
   resolution: DEFAULT_RESOLUTION,
@@ -105,6 +125,7 @@ export const DEFAULTS: Settings = {
   spikeDistanceM: 50,
   estimatedSpeed: 'derived',
   camera: 'keep',
+  smart: DEFAULT_SMART,
   marker: DEFAULT_MARKER,
   export: DEFAULT_EXPORT,
   rate: 120,
@@ -122,6 +143,7 @@ export function loadSettings(): Settings {
         ...DEFAULTS,
         ...saved,
         marker: { ...DEFAULT_MARKER, ...saved.marker },
+        smart: { ...DEFAULT_SMART, ...saved.smart },
         export: { ...DEFAULT_EXPORT, ...saved.export },
       };
       // v0.1 had a follow on/off toggle (§13.4).

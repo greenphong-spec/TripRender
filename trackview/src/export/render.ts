@@ -1,11 +1,12 @@
 import { LngLat, Map as MapLibreMap, type StyleSpecification } from 'maplibre-gl';
 import { angleDiff, ViewSmoother } from '../map/camera';
 import { drawMarker, markerPose, prepareSprite, type MarkerSprite } from '../map/marker';
+import { SmartZoom, smartZoomAvailable } from '../map/smartzoom';
 import { BLANK_STYLE, MAP_STYLES, STYLE_ATTRIBUTION } from '../map/styles';
 import { TrackLayers, trackBounds } from '../map/tracklayers';
 import { sampleAt } from '../model/interpolate';
 import type { Track } from '../model/types';
-import type { ExportOptions, MapStyleId, MarkerSettings, Units } from '../settings';
+import type { ExportOptions, MapStyleId, MarkerSettings, SmartZoomSettings, Units } from '../settings';
 import { Overlays } from './overlays';
 import { resolutionById, TILE_WAIT_MS } from './presets';
 import type { FrameInfo, Plan } from './timeline';
@@ -32,6 +33,7 @@ export interface RenderSetup {
   track: Track;
   units: Units;
   marker: MarkerSettings;
+  smart: SmartZoomSettings;
   opts: ExportOptions;
   from: number;
   to: number;
@@ -56,6 +58,9 @@ export class ExportRenderer {
   private overview!: Cam;
   private camSmooth = new ViewSmoother(0.3, 1.0);
   private markerSmooth = new ViewSmoother(0, 0.5);
+  private smartZoom = new SmartZoom();
+  /** Zoom of the follow camera for the current frame (fixed, or smart zoom §15.6). */
+  private zoomNow = NaN;
   private flip = false;
   private keep: { lon: number; lat: number; pan: null | { from: [number, number]; to: [number, number]; t0: number } } | null = null;
   private wake: (() => void) | null = null;
@@ -148,6 +153,7 @@ export class ExportRenderer {
   reset(): void {
     this.camSmooth.reset();
     this.markerSmooth.reset();
+    this.smartZoom.reset();
     this.keep = null;
     this.flip = false;
     this.missingFrames = 0;
@@ -180,13 +186,13 @@ export class ExportRenderer {
     if (opts.camera === 'heading') {
       const availH = this.H - this.overlays.stripH;
       return {
-        lon: v.lon, lat: v.lat, zoom: opts.zoom,
+        lon: v.lon, lat: v.lat, zoom: this.zoomNow,
         bearing: Number.isFinite(v.bearing) ? v.bearing : 0,
         pitch: opts.tilt,
         padding: { ...base, top: availH * (HEADING_UP_Y - 0.5) * 2 },
       };
     }
-    return { lon: v.lon, lat: v.lat, zoom: opts.zoom, bearing: 0, pitch: 0, padding: base };
+    return { lon: v.lon, lat: v.lat, zoom: this.zoomNow, bearing: 0, pitch: 0, padding: base };
   }
 
   /** Start a pan when the marker leaves the middle of the frame; cut when it is far outside. */
@@ -221,9 +227,12 @@ export class ExportRenderer {
   }
 
   /** Render one frame into `canvas`. */
-  async renderFrame(fi: FrameInfo, plan: Pick<Plan, 'rate'>): Promise<void> {
-    const { track } = this.setup;
+  async renderFrame(fi: FrameInfo, plan: Pick<Plan, 'rate' | 'fps'>): Promise<void> {
+    const { track, opts } = this.setup;
     const s = sampleAt(track, fi.pos);
+    const smart = opts.zoomMode === 'smart' && (opts.camera === 'north' || opts.camera === 'heading') && smartZoomAvailable(track);
+    const z = smart ? this.smartZoom.update(track, fi.pos, plan.rate, 1 / plan.fps, this.W, this.setup.smart) : NaN;
+    this.zoomNow = Number.isFinite(z) ? z : opts.zoom;
     let cam = this.followCam(fi.pos, plan.rate, fi.t);
     if (fi.follow < 1) cam = this.blend(this.overview, cam, fi.follow);
     this.map.jumpTo({ center: [cam.lon, cam.lat], zoom: cam.zoom, bearing: cam.bearing, pitch: cam.pitch, padding: cam.padding });

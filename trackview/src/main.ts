@@ -2,6 +2,7 @@ import './styles/tokens.css';
 import './styles/app.css';
 import { ExportPanel } from './export/exportpanel';
 import { CAMERA_CYCLE, CAMERA_LABEL } from './map/camera';
+import { smartZoomAvailable } from './map/smartzoom';
 import { TrackMap } from './map/trackmap';
 import { buildTrack } from './model/build';
 import { sampleAt } from './model/interpolate';
@@ -14,6 +15,7 @@ import { SpeedChart } from './ui/chart';
 import { InfoCard } from './ui/infocard';
 import { MarkerPanel } from './ui/markerpanel';
 import { SettingsPanel } from './ui/settingspanel';
+import { SmartZoomFields } from './ui/smartzoomfields';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const BUILD_KEYS: (keyof BuildSettings)[] = ['skipPauses', 'pauseThresholdSec', 'removeSpikes', 'spikeDistanceM', 'estimatedSpeed'];
@@ -62,6 +64,7 @@ function setCamera(mode: CameraMode) {
   camMode = mode;
   map.setCamera(mode);
   renderCamera();
+  renderZoom();
 }
 
 function renderCamera() {
@@ -99,18 +102,59 @@ function updateSettings(patch: Partial<Settings>) {
     map.setMarker(settings.marker);
     onPosition(true);
   }
+  if (patch.smart) {
+    map.setSmartZoom(settings.smart);
+    // Smart zoom keeps the vehicle centred: it needs a follow mode (§15.1).
+    if (settings.smart.enabled && !prev.smart.enabled && (settings.camera === 'off' || settings.camera === 'keep')) {
+      updateSettings({ camera: 'north' });
+      panel.render();
+    }
+    renderSmart();
+  }
   if (BUILD_KEYS.some((k) => k in patch && patch[k] !== prev[k])) rebuild();
   else if (patch.units && patch.units !== prev.units && track) {
     chart.setTrack(track, settings.units);
     renderTrackText();
     onPosition(true);
   }
+  if (patch.units) renderSmart();
   renderStyleMenu();
   exportPanel.refresh();
 }
 const panel = new SettingsPanel(() => settings, updateSettings);
 new MarkerPanel(() => settings.marker, (marker) => updateSettings({ marker }), toast);
+
+// ---------- Smart zoom (§15) ----------
+const smartHost = {
+  smart: () => settings.smart,
+  units: () => settings.units,
+  track: () => track,
+  update: (smart: Settings['smart']) => updateSettings({ smart }),
+};
+const smartFields = new SmartZoomFields($('sz-settings-fields'), smartHost);
+
+function setSmartEnabled(enabled: boolean) {
+  if (enabled && !smartZoomAvailable(track)) {
+    toast(track ? 'Smart zoom needs speed data; this track has none.' : 'Open a track to use smart zoom.');
+    renderSmart();
+    return;
+  }
+  updateSettings({ smart: { ...settings.smart, enabled } });
+}
+
+function renderSmart() {
+  const available = !track || smartZoomAvailable(track);
+  const box = $<HTMLInputElement>('sz-enabled');
+  box.checked = settings.smart.enabled;
+  box.disabled = !available;
+  $('sz-toggle').classList.toggle('disabled', !available);
+  $('sz-toggle').title = available ? '' : 'Needs speed data';
+  smartFields.render();
+  renderZoom();
+}
+$('sz-enabled').addEventListener('change', (e) => setSmartEnabled((e.target as HTMLInputElement).checked));
 const exportPanel = new ExportPanel({
+  smartHost,
   track: () => track,
   settings: () => settings,
   update: updateSettings,
@@ -178,6 +222,7 @@ function show(t: Track, pos: number) {
   $<HTMLButtonElement>('export-btn').disabled = false;
   map.setTrack(t);
   chart.setTrack(t, settings.units);
+  renderSmart();
   panel.setTrackInfo(t);
   renderTrackText();
   player.setTrack(t, pos);
@@ -251,11 +296,22 @@ $('rates').addEventListener('click', (e) => {
 
 // ---------- Map controls ----------
 // Zoom readout (§6.3): shows the map zoom to reuse later, e.g. in Export video → Zoom.
+// Clicking it toggles smart zoom (§15.5); the copy icon copies the number.
 const zoomText = () => map.map.getZoom().toFixed(1);
-const renderZoom = () => ($('zoom-level').textContent = `z ${zoomText()}`);
+function renderZoom() {
+  const auto = settings.smart.enabled && map.smartActive;
+  const el = $('zoom-level');
+  el.textContent = `z ${zoomText()}${auto ? ' auto' : ''}`;
+  el.classList.toggle('auto', settings.smart.enabled);
+  el.title = `Map zoom level — click to turn Smart zoom ${settings.smart.enabled ? 'off' : 'on'}`;
+}
 map.map.on('zoom', renderZoom);
-renderZoom();
-$('zoom-level').addEventListener('click', async () => {
+$('zoom-level').addEventListener('click', () => {
+  const was = settings.smart.enabled;
+  setSmartEnabled(!was);
+  if (settings.smart.enabled !== was) toast(`Smart zoom ${settings.smart.enabled ? 'on' : 'off'}`);
+});
+$('zoom-copy').addEventListener('click', async () => {
   const z = zoomText();
   try {
     await navigator.clipboard.writeText(z);
@@ -388,7 +444,9 @@ document.addEventListener('keydown', (e) => {
 
 new ResizeObserver(() => map.resize()).observe($('map'));
 
+map.setSmartZoom(settings.smart);
 renderCamera();
+renderSmart();
 
 // Dev-only handle for debugging from the browser console.
 if (import.meta.env.DEV) Object.assign(window, { trackview: { player, map, chart, info, exportPanel } });

@@ -7,9 +7,10 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import type { Sample } from '../model/interpolate';
 import type { Track } from '../model/types';
-import type { CameraMode, MapStyleId, MarkerSettings } from '../settings';
+import { DEFAULT_SMART, type CameraMode, type MapStyleId, type MarkerSettings, type SmartZoomSettings } from '../settings';
 import { ViewSmoother } from './camera';
 import { MarkerView } from './marker';
+import { SmartZoom, smartZoomAvailable } from './smartzoom';
 import { BLANK_STYLE, MAP_STYLES } from './styles';
 import { TrackLayers, trackBounds } from './tracklayers';
 
@@ -48,6 +49,11 @@ export class TrackMap {
   private popup = new Popup({ closeButton: false, offset: 10 });
   private camSmooth = new ViewSmoother(0.3, 1.0);
   private markerSmooth = new ViewSmoother(0, 0.5);
+  private smart = new SmartZoom();
+  private smartSettings: SmartZoomSettings = DEFAULT_SMART;
+  /** Zoom last set by smart zoom; a different map zoom on the next frame is a manual zoom (§15.5). */
+  private autoZoom = NaN;
+  private lastFrame = 0;
 
   constructor(container: HTMLElement, styleId: MapStyleId, view: { lng: number; lat: number; zoom: number } | null, marker: MarkerSettings, private events: TrackMapEvents) {
     this.map = new MapLibreMap({
@@ -122,6 +128,7 @@ export class TrackMap {
     this.hover.remove();
     this.camSmooth.reset();
     this.markerSmooth.reset();
+    this.resetSmartZoom();
     this.layers.setTrack(track);
     if (!track) {
       [this.cur, this.start, this.end].forEach((m) => m.remove());
@@ -135,6 +142,22 @@ export class TrackMap {
 
   setMarker(ms: MarkerSettings): void {
     this.markerView.set(ms);
+  }
+
+  setSmartZoom(sz: SmartZoomSettings): void {
+    this.smartSettings = sz;
+    this.autoZoom = NaN;
+  }
+
+  /** Smart zoom drives the zoom: on, a centred follow mode and a track with speed (§15.1). */
+  get smartActive(): boolean {
+    return this.smartSettings.enabled && (this.camera === 'north' || this.camera === 'heading') && smartZoomAvailable(this.track);
+  }
+
+  /** Forget the manual zoom offset (file load, fit). */
+  private resetSmartZoom() {
+    this.smart.reset();
+    this.autoZoom = NaN;
   }
 
   /** Change the camera mode; leaving heading-up turns the map back to north up. */
@@ -155,18 +178,32 @@ export class TrackMap {
     const heading = this.markerSmooth.at(t, pos, rate).bearing;
     if (this.styleReady) this.layers.setProgress(s);
 
+    const now = performance.now();
+    const dt = Math.min(0.1, (now - this.lastFrame) / 1000);
+    this.lastFrame = now;
     if (playing && this.camera !== 'off' && !this.map.isZooming()) {
       if (this.camera === 'keep') this.keepInView(s);
       else {
         const v = this.camSmooth.at(t, pos, rate);
         const up = this.camera === 'heading';
+        let zoom: number | undefined;
+        if (this.smartActive) {
+          // A wheel / button zoom since the last frame shifts the whole curve instead of stopping smart zoom.
+          if (Number.isFinite(this.autoZoom) && Math.abs(this.map.getZoom() - this.autoZoom) > 1e-3) {
+            this.smart.shift(this.map.getZoom() - this.autoZoom);
+          }
+          const z = this.smart.update(t, pos, rate, dt, this.map.getContainer().clientWidth, this.smartSettings);
+          if (Number.isFinite(z)) zoom = z;
+        }
         this.map.jumpTo({
           center: [v.lon, v.lat],
+          zoom,
           bearing: up && Number.isFinite(v.bearing) ? v.bearing : up ? this.map.getBearing() : 0,
           padding: up ? { ...NO_PADDING, top: this.map.getContainer().clientHeight * (HEADING_UP_Y - 0.5) * 2 } : NO_PADDING,
         });
+        this.autoZoom = zoom === undefined ? NaN : this.map.getZoom();
       }
-    }
+    } else if (!playing) this.autoZoom = NaN;
     this.markerView.update(heading - this.map.getBearing(), playing);
   }
 
@@ -190,6 +227,7 @@ export class TrackMap {
     const { clientWidth: w, clientHeight: h } = this.map.getContainer();
     const pad = Math.min(60, w / 8, h / 8);
     const left = leftInset + pad < w * 0.6 ? leftInset + pad : pad;
+    this.resetSmartZoom();
     this.map.setPadding(NO_PADDING);
     this.map.fitBounds(trackBounds(t), {
       padding: { top: pad, bottom: pad, left, right: pad + 60 }, maxZoom: 16, duration: 0, bearing: 0,

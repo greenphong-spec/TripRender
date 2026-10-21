@@ -1,7 +1,9 @@
 import { markerImageUrl } from '../map/marker';
+import { smartZoomAvailable } from '../map/smartzoom';
 import type { Track } from '../model/types';
 import { hms, humanDuration } from '../model/units';
 import type { ExportOptions, MapStyleId, Settings } from '../settings';
+import { SmartZoomFields, type SmartZoomHost } from '../ui/smartzoomfields';
 import { downloadBlob, fileSink, isTauri, memorySink, pickCodec, VideoWriter, type Codec } from './encode';
 import {
   bitrateFor, FRAME_RATES, LONG_VIDEO_SEC, RATE_PRESETS, RESOLUTIONS, resolutionById,
@@ -15,6 +17,8 @@ const BROWSER_MEMORY_WARN = 2 * 1024 ** 3;
 const PREVIEW_DELAY_MS = 250;
 
 export interface ExportHost {
+  /** Smart zoom values, shared with the settings drawer (§15.6). */
+  smartHost: SmartZoomHost;
   track(): Track | null;
   settings(): Settings;
   update(patch: Partial<Settings>): void;
@@ -54,8 +58,10 @@ export class ExportPanel {
   private previewTimer = 0;
   private cancelRequested = false;
   private result: { blob: Blob; name: string } | null = null;
+  private smartFields: SmartZoomFields;
 
   constructor(private host: ExportHost) {
+    this.smartFields = new SmartZoomFields($('ex-smart-fields'), host.smartHost);
     const rates = $('ex-rates');
     for (const p of RATE_PRESETS) rates.append(this.chip(String(p.rate), p.label));
     rates.append(this.chip('fit', 'Fit to duration'));
@@ -230,8 +236,16 @@ export class ExportPanel {
     $('ex-tilt-row').hidden = o.camera !== 'heading';
     $('ex-tilt-v').textContent = `${o.tilt}°`;
     const overview = o.camera === 'overview';
-    $('ex-zoom-row').hidden = overview;
-    $('ex-use-zoom').hidden = overview;
+    // Smart zoom needs a centred camera and speed data (§15.6).
+    const smartOk = (o.camera === 'north' || o.camera === 'heading') && smartZoomAvailable(t);
+    const smart = smartOk && o.zoomMode === 'smart';
+    $('ex-zoommode-row').hidden = !(o.camera === 'north' || o.camera === 'heading');
+    ($('ex-zoommode').querySelector('option[value=smart]') as HTMLOptionElement).disabled = !smartZoomAvailable(t);
+    $('ex-zoommode').title = smartZoomAvailable(t) ? '' : 'Smart zoom needs speed data';
+    $('ex-smart-fields').hidden = !smart;
+    if (smart) this.smartFields.render();
+    $('ex-zoom-row').hidden = overview || smart;
+    $('ex-use-zoom').hidden = overview || smart;
     $('ex-intro-row').hidden = overview;
     $('ex-outro-row').hidden = overview;
     $('ex-zoom-v').textContent = o.zoom.toFixed(1);
@@ -313,9 +327,9 @@ export class ExportPanel {
     }
     const [from, to] = this.span();
     const track = this.host.track()!;
-    const cfgKey = JSON.stringify([o, s.marker, s.units, from, to, track.fileName, track.n, track.stats.duration]);
+    const cfgKey = JSON.stringify([o, s.marker, s.smart, s.units, from, to, track.fileName, track.n, track.stats.duration]);
     if (cfgKey !== this.cfgKey) {
-      await this.renderer.configure({ track, units: s.units, marker: s.marker, opts: o, from, to });
+      await this.renderer.configure({ track, units: s.units, marker: s.marker, smart: s.smart, opts: o, from, to });
       this.cfgKey = cfgKey;
     }
     return this.renderer;
