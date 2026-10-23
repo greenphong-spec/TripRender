@@ -585,9 +585,9 @@ The target zoom comes from the vehicle's speed through a curve between a **Near 
 - The zoom readout (§6.3) shows the live value with "auto": "z 15.2 auto".
 
 ### 15.3 Which speed
-- The speed fed into the curve is the **smoothed** track speed, averaged over a window centred on the position (like the camera smoothing, §13.4), but longer: ±8 s of screen/video time. One-second dips (a pothole brake, GPS noise) do not move the zoom.
-- Because the window is measured in screen/video time, it spans more of the track at high rates (×60: ±8 min of driving). Then the zoom follows the longer-term speed and short stops do not zoom in; this is intended (no pumping). Checked on Aug 31: at ×10 the zoom moves smoothly between 13.0 and 14.5 through a town section; at ×60 it stays about 13.2.
-- **Look-ahead**: the window is shifted 2 s of screen/video time forward, so the zoom starts to widen *before* the vehicle speeds up onto a highway and closes in before it slows into a junction.
+- The speed fed into the curve is the **smoothed** track speed, averaged over a window centred on the position (like the camera smoothing, §13.4), but longer: ±8 s of screen/video time, **at most ±30 s of track time**, **Gaussian-weighted** (σ = half the window, so the middle counts most). One-second dips (a pothole brake, GPS noise) do not move the zoom.
+- The window grows with the playback rate (×2: ±16 s of driving) up to the ±30 s cap, reached at ×4. Calm at high rates comes from the rate limit and rate widening (§15.4), not from a longer window: a window as long as the track's slow/fast phases follows the trip average, not the vehicle, and a flat one even turns the zoom upside down (Sep 13 KMZ at ×10 with ±80 s over 1–2 min city phases: zoomed out while crawling below the slow speed). Checked on Sep 13 at ×10: while crawling the zoom closes in to about the Near zoom, at 30+ km/h it widens towards the Far zoom.
+- **Look-ahead**: the window is shifted 2 s of screen/video time forward (at most 7.5 s of track time), so the zoom starts to widen *before* the vehicle speeds up onto a highway and closes in before it slows into a junction.
 - Collapsed pauses and stops (speed below 3 km/h, §13.4): the zoom eases to the Near zoom and holds.
 - Tracks without speed (untimed, or "Hidden" estimated speed, §5.5): Smart zoom is unavailable; the option is disabled with the tooltip "Needs speed data".
 
@@ -620,6 +620,7 @@ The target zoom comes from the vehicle's speed through a curve between a **Near 
 7. Mouse-wheel zoom during playback shifts the zoom and keeps following; a drag turns the camera off; clicking the zoom readout toggles "auto".
 8. Untimed 52100 KMZ: the option is disabled with "Needs speed data".
 9. Unit tests (no MapLibre): average → Auto speeds, speed → zoom curve, rate widening, rate limit, dead band and look-ahead.
+10. **Sep 13 KMZ** at ×10 (Auto speeds 9 / 34 km/h): crawling at ~8 km/h around 2:00 the target zoom is close to the Near zoom, clearly closer than in the ~20 km/h stretch before it; at 30+ km/h around 3:30 it is near the Far zoom.
 
 ### 15.8 Decisions (answered 2026-10-21)
 | # | Question | Decision |

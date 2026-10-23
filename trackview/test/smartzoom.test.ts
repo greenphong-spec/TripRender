@@ -128,4 +128,15 @@ describe('smart zoom on the sample tracks (§15.7)', () => {
     const far = z.update(aug31, 5_000_000, 10, 1 / 60, 1440, sz);
     expect(far).toBe(z.target(aug31, 5_000_000, 10, 1440, sz));
   });
+
+  it('follows a short city drive at ×10 (Sep 13 KMZ)', () => {
+    // 0–80 s at ~20 km/h, 90–150 s crawling below the slow speed (9 km/h), then 30+ km/h.
+    // A ±80 s window (8 s × 10) zoomed out while crawling; capped at ±30 s it closes in.
+    const sep13 = load('Sep_13,_2026_11_26_19.kmz');
+    const z = new SmartZoom();
+    const at = (sec: number) => z.target(sep13, sec * 1000, 10, 1440, sz);
+    expect(at(120)).toBeGreaterThan(16.5);
+    expect(at(120)).toBeGreaterThan(at(50) + 0.5);
+    expect(at(210)).toBeLessThan(14);
+  });
 });

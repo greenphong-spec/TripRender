@@ -10,6 +10,8 @@ const EARTH_M = 40_075_016.686;
 const TILE_PX = 512; // MapLibre tile size: metres per pixel = EARTH · cos(lat) / (512 · 2^zoom)
 const SPEED_HALF_SEC = 8; // speed window: ±8 s (§15.3)
 const LOOK_AHEAD_SEC = 2; // window shifted forward
+const SPEED_HALF_MAX_MS = 30_000; // at most ±30 s of track time, so city stop-and-go still shows at ×10
+const LOOK_AHEAD_MAX_MS = 7_500;
 const STEPS = 8; // window samples on each side
 const MAX_SCREEN_FRACTION = 0.5; // the vehicle crosses at most ½ map width per second (§15.4)
 const MAX_RATE = 0.5; // zoom levels per second
@@ -49,23 +51,28 @@ export function maxZoomForRate(groundMs: number, rate: number, widthPx: number, 
   return Math.log2((EARTH_M * Math.cos((lat * Math.PI) / 180)) / (TILE_PX * mpp));
 }
 
-/** Speed (m/s) averaged over ±8 s around a point 2 s ahead (screen/video seconds × rate); 0 while stopped. */
+/**
+ * Speed (m/s) averaged over ±8 s around a point 2 s ahead (screen/video seconds × rate), capped at ±30 s / 7.5 s
+ * of track time; 0 while stopped. Gaussian weights (σ = half the window): a flat average over a window as long as
+ * the slow/fast phases turns them upside down (at ×10, ±80 s of a city drive zoomed out while crawling).
+ */
 export function lookAheadSpeed(track: Track, pos: number, rate: number): number {
   if (!track.hasSpeed) return NaN;
   const s0 = sampleAt(track, pos);
   if (!isMoving(s0)) return 0;
   const end = track.playT[track.n - 1];
   const seg = track.seg[s0.i];
-  const center = pos + LOOK_AHEAD_SEC * 1000 * rate;
-  const half = SPEED_HALF_SEC * 1000 * rate;
-  let sum = 0, n = 0;
+  const center = pos + Math.min(LOOK_AHEAD_SEC * 1000 * rate, LOOK_AHEAD_MAX_MS);
+  const half = Math.min(SPEED_HALF_SEC * 1000 * rate, SPEED_HALF_MAX_MS);
+  let sum = 0, w = 0;
   for (let k = -STEPS; k <= STEPS; k++) {
     const s = sampleAt(track, Math.min(end, Math.max(0, center + (k / STEPS) * half)));
     if (track.seg[s.i] !== seg || !Number.isFinite(s.speed)) continue;
-    sum += s.speed;
-    n++;
+    const wk = Math.exp(-2 * (k / STEPS) ** 2);
+    sum += wk * s.speed;
+    w += wk;
   }
-  return n ? sum / n : s0.speed;
+  return w ? sum / w : s0.speed;
 }
 
 /** Moves the zoom towards a target: at most 0.5 level/s, eased, ignoring changes under 0.25 once settled. */
