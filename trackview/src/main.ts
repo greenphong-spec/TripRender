@@ -4,6 +4,7 @@ import { ExportPanel } from './export/exportpanel';
 import { CAMERA_CYCLE, CAMERA_LABEL } from './map/camera';
 import { smartZoomAvailable } from './map/smartzoom';
 import { TrackMap } from './map/trackmap';
+import { autoCurve, forgetCurve, loadCurve, saveCurve, type ZoomCurve, type ZoomKnot } from './map/zoomcurve';
 import { buildTrack } from './model/build';
 import { sampleAt } from './model/interpolate';
 import type { RawTrack, Track } from './model/types';
@@ -16,6 +17,7 @@ import { InfoCard } from './ui/infocard';
 import { MarkerPanel } from './ui/markerpanel';
 import { SettingsPanel } from './ui/settingspanel';
 import { SmartZoomFields } from './ui/smartzoomfields';
+import { ZoomStrip } from './ui/zoomstrip';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const BUILD_KEYS: (keyof BuildSettings)[] = ['skipPauses', 'pauseThresholdSec', 'removeSpikes', 'spikeDistanceM', 'estimatedSpeed'];
@@ -78,14 +80,17 @@ function renderCamera() {
 const cardInset = () => (!$('info-card').hidden && window.innerWidth > 640 ? CARD_INSET : 0);
 
 // ---------- Chart ----------
-const chart = new SpeedChart($('chart'), $('chart-tip'), $('chart-unit'), {
-  onSeek: (pos) => player.seek(pos),
-  onScrub(active) {
+const scrub = {
+  onSeek: (pos: number) => player.seek(pos),
+  onScrub(active: boolean) {
     if (active) {
       resumeAfterScrub = player.playing;
       player.pause();
     } else if (resumeAfterScrub) player.play();
   },
+};
+const chart = new SpeedChart($('chart'), $('chart-tip'), $('chart-unit'), {
+  ...scrub,
   onHover: (pos) => map.setHover(pos === null || !track ? null : sampleAt(track, pos)),
 });
 
@@ -104,6 +109,7 @@ function updateSettings(patch: Partial<Settings>) {
   }
   if (patch.smart) {
     map.setSmartZoom(settings.smart);
+    smartChanged(prev.smart);
     // Smart zoom keeps the vehicle centred: it needs a follow mode (§15.1).
     if (settings.smart.enabled && !prev.smart.enabled && (settings.camera === 'off' || settings.camera === 'keep')) {
       updateSettings({ camera: 'north' });
@@ -161,11 +167,85 @@ const exportPanel = new ExportPanel({
   playerPos: () => player.pos,
   pausePlayer: () => player.pause(),
   mapZoom: () => map.map.getZoom(),
+  zoomCurve: () => curve?.knots ?? null,
   openMarkerSettings() {
     panel.toggle(true);
     document.getElementById('marker-panel')!.scrollIntoView({ block: 'start' });
   },
   toast,
+});
+
+// ---------- Zoom curve (§16) ----------
+/** The track's smart zoom as editable control points; the follow camera and the video read the zoom from it. */
+let curve: ZoomCurve | null = null;
+let autoKnots: ZoomKnot[] | null = null;
+/** Last playback rate seen, to recompute the curve on a rate change when it follows the playback rate. */
+let curveRate = player.rate;
+
+const zoomStrip = new ZoomStrip($('zs-plot'), $('zs-readout'), {
+  ...scrub,
+  onEdit(knots) {
+    if (!track || !curve) return;
+    curve = { knots, rate: curve.rate, edited: true };
+    saveCurve(track, curve);
+    applyCurve(false);
+  },
+});
+
+/** Compute the auto curve at `rate`; a saved edited curve for this file wins over it. */
+function refreshCurve(rate: number) {
+  const auto = track && smartZoomAvailable(track) ? autoCurve(track, rate, map.map.getContainer().clientWidth, settings.smart) : null;
+  autoKnots = auto?.knots ?? null;
+  curve = (track && auto && loadCurve(track)) || auto;
+  applyCurve(true);
+}
+
+/** Recompute from scratch (edits are replaced), e.g. when the rate the curve is computed for changes. */
+function reloadCurve(rate: number, why: string) {
+  if (!track) return;
+  const hadEdits = !!curve?.edited;
+  forgetCurve(track);
+  refreshCurve(rate);
+  if (hadEdits) toast(`Zoom curve recomputed for ${why}; your edits were replaced.`);
+}
+
+function applyCurve(redrawStrip: boolean) {
+  map.setZoomCurve(curve?.knots ?? null);
+  if (redrawStrip) zoomStrip.set(curve, autoKnots, track?.stats.duration ?? 0);
+  renderZoomStrip();
+  exportPanel.refresh();
+}
+
+function renderZoomStrip() {
+  $('zoom-strip').hidden = !(track && curve && settings.smart.enabled);
+  $<HTMLSelectElement>('zs-rate').value = settings.smart.curveRate;
+  $('zs-state').textContent = curve ? `${curve.edited ? 'edited' : 'auto'} · ×${curve.rate}` : '';
+  $<HTMLButtonElement>('zs-reset').disabled = !curve?.edited;
+}
+
+/** Smart zoom settings changed: keep the curve in step (§16). */
+function smartChanged(prev: Settings['smart']) {
+  const sz = settings.smart;
+  if (!track) return renderZoomStrip();
+  if (sz.curveRate !== prev.curveRate) {
+    reloadCurve(sz.curveRate === 'playback' ? player.rate : autoRate(track.stats.duration), 'the new rate option');
+    return;
+  }
+  const valuesChanged = sz.near !== prev.near || sz.far !== prev.far || sz.slowKmh !== prev.slowKmh || sz.fastKmh !== prev.fastKmh;
+  if (valuesChanged) {
+    const edited = !!curve?.edited;
+    refreshCurve(curve?.rate ?? player.rate);
+    if (edited) toast('Your edited zoom curve is kept; use "Reset to auto" to apply the new values.');
+  } else renderZoomStrip();
+}
+
+$('zs-rate').addEventListener('change', (e) => {
+  updateSettings({ smart: { ...settings.smart, curveRate: (e.target as HTMLSelectElement).value as Settings['smart']['curveRate'] } });
+});
+$('zs-reset').addEventListener('click', () => {
+  if (!track || !curve) return;
+  forgetCurve(track);
+  refreshCurve(curve.rate);
 });
 
 // ---------- Loading ----------
@@ -188,7 +268,10 @@ function loadBytes(fileName: string, bytes: Uint8Array) {
     const t = buildTrack(r, fileName, settings);
     raw = r;
     show(t, 0);
-    player.setRate(autoRate(t.stats.duration));
+    // Set before the rate change, so loading never counts as "the rate changed" (which would replace edits).
+    curveRate = autoRate(t.stats.duration);
+    player.setRate(curveRate);
+    refreshCurve(curveRate);
     map.fit(cardInset());
     setCamera(settings.camera);
   } catch (err) {
@@ -211,6 +294,7 @@ function rebuild() {
     else hi = mid - 1;
   }
   show(t, t.playT[lo]);
+  refreshCurve(curve?.rate ?? player.rate);
   if (wasPlaying) player.play();
 }
 
@@ -260,6 +344,7 @@ function onPosition(force = false) {
   const s = sampleAt(track, player.pos);
   map.setProgress(s, player.pos, player.rate, player.playing);
   chart.setPosition(player.pos);
+  zoomStrip.setPosition(player.pos);
   info.update(track, s, player.pos, settings.units, force || !player.playing);
   $('pos-time').textContent = hms(player.pos);
 }
@@ -276,6 +361,10 @@ player.onState(() => {
   const inMenu = !CHIP_RATES.includes(player.rate);
   more.classList.toggle('active', inMenu);
   more.textContent = inMenu ? `×${player.rate} ▾` : '▾';
+  if (player.rate !== curveRate) {
+    curveRate = player.rate;
+    if (settings.smart.curveRate === 'playback') reloadCurve(player.rate, `the playback rate ×${player.rate}`);
+  }
   onPosition(true);
 });
 
@@ -296,22 +385,17 @@ $('rates').addEventListener('click', (e) => {
 
 // ---------- Map controls ----------
 // Zoom readout (§6.3): shows the map zoom to reuse later, e.g. in Export video → Zoom.
-// Clicking it toggles smart zoom (§15.5); the copy icon copies the number.
+// Clicking it (or the copy icon) copies the number. Smart zoom is switched only in the settings (§15.5).
 const zoomText = () => map.map.getZoom().toFixed(1);
 function renderZoom() {
   const auto = settings.smart.enabled && map.smartActive;
   const el = $('zoom-level');
   el.textContent = `z ${zoomText()}${auto ? ' auto' : ''}`;
   el.classList.toggle('auto', settings.smart.enabled);
-  el.title = `Map zoom level — click to turn Smart zoom ${settings.smart.enabled ? 'off' : 'on'}`;
+  el.title = 'Map zoom level — click to copy';
 }
 map.map.on('zoom', renderZoom);
-$('zoom-level').addEventListener('click', () => {
-  const was = settings.smart.enabled;
-  setSmartEnabled(!was);
-  if (settings.smart.enabled !== was) toast(`Smart zoom ${settings.smart.enabled ? 'on' : 'off'}`);
-});
-$('zoom-copy').addEventListener('click', async () => {
+async function copyZoom() {
   const z = zoomText();
   try {
     await navigator.clipboard.writeText(z);
@@ -319,7 +403,9 @@ $('zoom-copy').addEventListener('click', async () => {
   } catch {
     toast(`Zoom ${z}`);
   }
-});
+}
+$('zoom-level').addEventListener('click', copyZoom);
+$('zoom-copy').addEventListener('click', copyZoom);
 $('zoom-in').addEventListener('click', () => map.zoomBy(1));
 $('zoom-out').addEventListener('click', () => map.zoomBy(-1));
 // Stopped: fit the track and restore the chosen camera. Playing: next camera mode (§6.3).
@@ -329,7 +415,9 @@ $('fit-btn').addEventListener('click', () => {
     map.fit(cardInset());
     return;
   }
-  const next = CAMERA_CYCLE[(CAMERA_CYCLE.indexOf(camMode) + 1) % CAMERA_CYCLE.length];
+  // With smart zoom on, only the centred modes it needs: the button must not switch it off (§15.5).
+  const cycle: CameraMode[] = settings.smart.enabled && smartZoomAvailable(track) ? ['north', 'heading'] : CAMERA_CYCLE;
+  const next = cycle[(cycle.indexOf(camMode) + 1) % cycle.length];
   updateSettings({ camera: next });
   setCamera(next);
   panel.render();

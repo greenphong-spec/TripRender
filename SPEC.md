@@ -1,9 +1,9 @@
-# Trackview — Specification (v0.4)
+# Trackview — Specification (v0.5)
 
 A desktop GPS track viewer (web UI in a Tauri shell) that **replays** a recorded trip on a real online map,
 with a live info card and a speed chart synced to the map. Target look: `expected_UI.png`.
 
-Status: §1–§12 approved for implementation 2026-10-19 (decisions on the v0.1 open questions are in §12). §13 Video export approved 2026-10-20 (decisions in §13.10). §14 Position marker approved 2026-10-20 (decisions in §14.8). §15 Smart zoom approved 2026-10-21 (decisions in §15.8).
+Status: §1–§12 approved for implementation 2026-10-19 (decisions on the v0.1 open questions are in §12). §13 Video export approved 2026-10-20 (decisions in §13.10). §14 Position marker approved 2026-10-20 (decisions in §14.8). §15 Smart zoom approved 2026-10-21 (decisions in §15.8). §16 Zoom curve editor added 2026-10-23 (decisions in §16.6).
 
 ---
 
@@ -42,18 +42,19 @@ Status: §1–§12 approved for implementation 2026-10-19 (decisions on the v0.1
 | Map rendering | MapLibre GL JS | 6.15.x |
 | Speed chart | uPlot (small, fast, canvas; custom cursor/shading via hooks) | 1.6.32 |
 | KMZ unzip | fflate | 0.8.3 |
-| XML parsing | Browser `DOMParser` (no dependency) | — |
-| Tests | Vitest | latest 3.x/4.x |
-| Desktop shell | Tauri 2 (Rust, WebView2) | 2.x |
+| XML parsing | Own small parser (`src/parse/xml.ts`, no dependency): reduces names to their local name and handles CDATA, so parsing is identical in WebView2 and in Node tests | — |
+| Video encoding / muxing (§13) | Mediabunny | 1.61.x |
+| Tests | Vitest | 5.x |
+| Desktop shell | Tauri 2 (Rust, WebView2), plus `plugin-dialog` and `plugin-fs` for saving videos (§13.6) | 2.x |
 
 No framework (React etc.). The UI is small: plain TS modules plus CSS. Node 24 is installed locally.
 
 **Tauri specifics**
 - The window opens at 1440×900 (minimum 960×600), titled "Trackview".
 - `dragDropEnabled: false` on the window, so HTML5 drag-and-drop reaches the page. (Tauri otherwise captures file drops on Windows.)
-- Files are opened through the HTML `<input type=file>` and drop events. No Rust file-system plugin is needed in v1.
+- Files are opened through the HTML `<input type=file>` and drop events. The Tauri dialog and fs plugins are used only to save exported videos (§13.6).
 - The CSP allows `https:` for tiles, styles, fonts and glyphs, and `blob:` for MapLibre workers.
-- Commands: `npm run dev` (browser), `npm run tauri dev` (desktop window, hot reload), `npm run tauri build` (produces `Trackview.exe` and an installer under `src-tauri/target/release/`).
+- Commands: `npm run dev` (browser), `npm run tauri dev` (desktop window, hot reload), `npm run tauri build` (produces `src-tauri/target/release/trackview.exe` and an NSIS installer under `src-tauri/target/release/bundle/nsis/`).
 
 **Deliverable**: a `trackview/` folder at the repo root. `npm run dev` runs it in the browser, `npm run tauri build` produces the desktop `.exe`, and `npm test` runs the tests against `example_GPSfiles/`.
 
@@ -81,46 +82,63 @@ No framework (React etc.). The UI is small: plain TS modules plus CSS. Node 24 i
 
 ## 4. Data model
 
+Parsers emit a `RawTrack` exactly as found in the file; `buildTrack` (§5.2–§5.5) turns it into an immutable `Track` of aligned typed arrays. Changing a processing setting (§7.7) rebuilds the `Track` from the kept `RawTrack`.
+
 ```ts
-interface TrackPoint {
+interface RawPoint {
   lat: number; lon: number;       // degrees, WGS84
-  ele: number | null;             // metres; null if missing (or always 0 in the dashcam file → treated as missing)
-  t: number | null;               // epoch ms (UTC); null for untimed tracks
-  speedRec: number | null;        // recorded speed, m/s
-  courseRec: number | null;       // recorded course, radians → converted to degrees for display
-  seg: number;                    // segment index
+  ele: number | null;             // metres
+  t: number | null;               // epoch ms (UTC)
+  speed: number | null;           // recorded speed, m/s
+  course: number | null;          // recorded course, degrees (radian sources are converted by the parser)
+}
+
+interface RawTrack {
+  name: string; creator: string; format: 'gpx' | 'kml' | 'kmz';
+  segments: RawPoint[][];
+  waypoints: Waypoint[];          // name, lat, lon, ele, t, desc
+  timeHint?: { start: number; end: number };            // estimated timing (§5.3)
+  statedStats?: { maxKmh?: number; avgKmh?: number };   // from the file's description
 }
 
 interface Track {
   name: string;                   // <metadata><name> / <Document><name> / file name
-  fileName: string;
-  format: 'gpx' | 'kml' | 'kmz';
+  fileName: string; format: 'gpx' | 'kml' | 'kmz'; creator: string;
   timing: 'timed' | 'estimated' | 'untimed';
-  points: TrackPoint[];           // sorted and cleaned (§5.2)
-  waypoints: Waypoint[];          // name, lat, lon, ele?, t?, desc?
-  // derived (§5.5), arrays aligned with points:
-  dist: Float64Array;             // cumulative metres (no bridging across segments)
-  speed: Float32Array;            // m/s (recorded or derived)
-  playT: Float64Array;            // playback-timeline ms (pauses collapsed)
+  n: number; segmentCount: number;
+  // aligned by point index, sorted and cleaned (§5.2); NaN = missing
+  lat, lon: Float64Array;
+  ele: Float64Array;  hasEle: boolean;    // always 0 (dashcam) → all NaN
+  t: Float64Array;                        // epoch ms; NaN when untimed
+  seg: Int32Array;                        // segment index
+  course: Float64Array;                   // recorded course, degrees
+  dist: Float64Array;                     // cumulative metres (no bridging across segments)
+  speed: Float64Array; hasSpeed: boolean; speedSource: 'recorded' | 'derived' | 'none';
+  playT: Float64Array;                    // playback-timeline ms (pauses collapsed)
+  pauses: Pause[];                        // index, realMs, playStart, playEnd, segmentBreak
+  waypoints: Waypoint[];
+  spikesRemoved: number;
+  stats: TrackStats;                      // distance, duration, movingMs, totalMs, avg/max speed, ele min/max/gain
+  statedStats?: { maxKmh?: number; avgKmh?: number };
 }
 ```
 
 ## 5. Processing pipeline
 
 ### 5.1 Parsing
-- **Format detection** by extension, then by content sniffing (`<gpx`, `<kml`, ZIP magic `PK\x03\x04`).
-- **GPX 1.0/1.1**: `trk/trkseg/trkpt` (`lat`, `lon`, `ele`, `time`), `rte/rtept` as a fallback track, `wpt` → waypoints. Speed, in this order: `<speed>` (GPX 1.0), `gpxtpx:speed` (Garmin TrackPointExtension), `geotracker:meta@s`. Course: `<course>` / `geotracker:meta@c` (radians).
+- **Format detection** by content sniffing (ZIP magic `PK\x03\x04` → KMZ, `<gpx`, `<kml` in the first 4 KB), with the extension as a fallback.
+- **GPX 1.0/1.1**: `trk/trkseg/trkpt` (`lat`, `lon`, `ele`, `time`), `rte/rtept` as a fallback track, `wpt` → waypoints. Speed, in this order: `<speed>` (GPX 1.0), `gpxtpx:speed` (Garmin TrackPointExtension), `geotracker:meta@s`. Course: `<course>` / extension `course` (degrees), else `geotracker:meta@c` (radians → degrees).
 - **KML**: match tags by local name, so it works with any namespace prefix.
   - `gx:Track`: pair the *direct-child* `<when>` and `<gx:coord>` elements in order ("lon lat alt", space-separated). `ExtendedData/SchemaData/gx:SimpleArrayData[@name=speed|course]` → `speedRec` / `courseRec`. Each `gx:Track` inside a `gx:MultiTrack` is one segment.
   - `LineString`: `coordinates` ("lon,lat,alt", whitespace-separated); each LineString is one segment, untimed.
   - `Point` Placemarks → waypoints. Use the Placemark's `TimeStamp/when` if present. Skip "Start"/"End" markers that sit exactly on the track's first/last point.
   - If a file contains both a `gx:Track` and a `LineString`, use the `gx:Track`.
-- **KMZ**: unzip with fflate. Use `doc.kml` if present, otherwise the first `*.kml` entry (the 52100 file uses `20260908081016-52100-map.kml`).
+- **KMZ**: unzip with fflate. Use `doc.kml` if present, otherwise the first `*.kml` entry by name (the 52100 file uses `20260908081016-52100-map.kml`).
 - Malformed or empty file → a readable error toast; the app keeps the previous track.
 
 ### 5.2 Cleaning
 - Drop points with non-finite or out-of-range lat/lon.
-- Timed tracks: sort points by `t` within each segment (stable sort), then merge points with identical `t` (keep the last one). This fixes the 5 dt ≤ 0 points in the Aug 31 file.
+- Timed tracks: sort points by `t` within each segment (stable sort), then merge points with identical `t` (keep the last one), then order the segments by their first time. This fixes the 5 dt ≤ 0 points in the Aug 31 file.
 - Keep duplicate consecutive positions — they represent stopped time.
 - **Off-route spike filter** (setting "Remove GPS spikes", default **on**). It removes points that jump away from the route and back. It runs within each segment, comparing each candidate point *p* with the last kept point *a* and the next point *c*. *p* is dropped when either:
   - **detour**: *p* lies more than `spikeDistance` (default **50 m**, configurable 10–500 m) from the line *a*–*c*, **and** (|ap| + |pc|) / |ac| > 3; or
@@ -140,14 +158,14 @@ interface Track {
 - A *pause* is a time gap between consecutive points greater than **`pauseThreshold` (default 60 s)**, or any segment break.
 - **Skip pauses** toggle (default **on**): each pause takes **1 s** on the playback timeline (`playT`). The marker holds still and the info card shows a "Paused 11 h 47 min" chip during that second. Off: real time is used.
 - The chart x-axis follows `playT` (so it uses moving time when skipping), with a thin dashed break mark at each collapsed pause.
-- Header and footer show **total time** and **moving time**: "03:27:30 moving · 15:41:33 total".
+- The header summary shows the playback duration, plus the total time when it is more than 1 min longer: "150.1 km · 03:27:30 (15:41:33 total) · <n> points". The playback bar shows `elapsed / playback duration`.
 
 ### 5.5 Derived values
 - **Distance**: haversine (R = 6,371,008.8 m), summed within segments only.
-- **Speed**: use `speedRec` if ≥ 90 % of points have it. Otherwise derive it as distance/time over a centred ±2-point window. Values above 250 km/h, or implying more than 15 m/s² acceleration, are treated as outliers and replaced by interpolation.
+- **Speed**: use `speedRec` if ≥ 90 % of points have it. Otherwise derive it as distance/time over a centred ±2-point window (within the segment). Values above 250 km/h (or negative) are treated as outliers and replaced by interpolation within the segment.
 - **Estimated-time tracks (dashcam)**: setting "Speed for estimated timing" = **Derived** (default; computed as above from the estimated times) or **Hidden**. Hidden shows "—" in the info card and the elevation/distance chart instead, and the footer shows the avg/max stated in the file's description (e.g. "Max 99 km/h · Avg 35.2 km/h").
 - **Chart smoothing**: a 5-sample moving average for display only. The info card shows the unsmoothed, interpolated value.
-- **Stats**: avg speed = moving distance / moving time; max speed = 99th-percentile-capped maximum of speed after outlier removal; total distance; elevation min/max and gain (ignoring changes under 3 m).
+- **Stats**: avg speed = moving distance / moving time; max speed = maximum of speed after outlier removal; total distance; elevation min/max and gain (ignoring changes under 3 m).
 
 ### 5.6 Interpolation at any playback time
 Binary-search `playT` for the bracketing points i, i+1 and compute the fraction f. Lat/lon (linear is fine at these spacings), ele, dist, speed and clock time are all linear in f. Bearing for the marker arrow: course if recorded, otherwise the bearing from point i to point i+1.
@@ -169,18 +187,18 @@ Binary-search `playT` for the bracketing points i, i+1 and compute the fraction 
 
 ### 6.2 Layers (top to bottom)
 1. Current-position marker: by default the built-in **car** icon (§14.1), 24 px, accent red, rotating with the heading, with a soft halo (pulsing while playing). The alternative "Dot" type is a 10 px dot in accent red with a white ring and a 24 px soft halo, plus a small heading wedge when course data exists. Shape, image and size can be changed (§14).
-2. Waypoints: 8 px blue dots, with the name shown in a tooltip on hover or click.
-3. Start: 8 px green dot. End: 9 px black square.
-4. **Travelled path**: accent red `#D2401E`, 4 px, round joins.
-5. **Remaining path**: slate `#5B6B76`, 3 px.
+2. Waypoints: 10 px blue dots with a 2 px white ring outside (14 px overall); clicking one shows its name and description in a popup (hover shows a pointer cursor).
+3. Start: 14 px green dot, including a 3 px white ring. End: 13 px black square, including a 2 px white border.
+4. **Travelled path**: accent red `#D2401E`, 4.5 px, round joins and caps.
+5. **Remaining path**: slate `#5B6B76`, 3.5 px.
 6. Segment breaks are not joined. During a collapsed pause that spans a segment break, the marker jumps.
 
-Splitting is done by MapLibre `line-gradient` with `lineMetrics: true` on one GeoJSON line per segment, updating the gradient stop at the current progress each frame. This is cheap and avoids rebuilding geometry. If perf tests show this is too slow, fall back to updating a "travelled" source with a sliced coordinate array at a throttled 15 Hz.
+Splitting: each segment is cut into line chunks of 32 points (one GeoJSON source). Chunks fully behind the marker are recoloured through MapLibre **feature-state** (`done`), and a small `trk-head` source draws the partial chunk from its start up to the marker. So no geometry is rebuilt per frame; only the head line (≤ 33 points) is updated. The layers live in `src/map/tracklayers.ts`, shared with the video export map, and are re-added (with the feature-state re-applied) after every style change.
 
 ### 6.3 Map controls (bottom-right, 44 px square white buttons)
-- **Zoom readout** above the buttons: the current map zoom with one decimal ("z 14.2"; "z 15.2 auto" while Smart zoom drives it, §15), updated live while zooming. Clicking the readout toggles Smart zoom on/off (§15.5). A small copy icon next to it copies the number to the clipboard (toast "Zoom 14.2 copied"), so it can be reused later, e.g. typed into Export video → Zoom (§13.3, which also has "Use current map zoom").
+- **Zoom readout** above the buttons: the current map zoom with one decimal ("z 14.2"; "z 15.2 auto" while Smart zoom drives it, §15), updated live while zooming. Clicking the readout, or the small copy icon next to it, copies the number to the clipboard (toast "Zoom 14.2 copied"), so it can be reused later, e.g. typed into Export video → Zoom (§13.3, which also has "Use current map zoom").
 - Zoom in (+), zoom out (−).
-- **Fit / follow** (crosshair icon). When stopped, one click fits the whole track. While playing, each click moves to the next **camera mode** (§13.4): Off → Follow north up → Follow heading up → Keep in view → Off. The button shows the active mode. "Keep in view" pans the camera to keep the marker inside the middle 60 % of the view. Any manual pan or rotate sets the mode to Off.
+- **Fit / follow** (crosshair icon). When stopped, one click fits the whole track. While playing, each click moves to the next **camera mode** (§13.4): Off → Follow north up → Follow heading up → Keep in view → Off; with Smart zoom on (§15) it only switches between Follow north up and Follow heading up. The button shows the active mode. "Keep in view" pans the camera to keep the marker inside the middle 60 % of the view. A manual pan sets the mode to Off, except while Smart zoom is following: then the camera only pauses during the drag and follows again on release (§15.5).
 - Style switcher (layers icon): Light / Streets / Satellite.
 - On file load: fit the track bounds with 60 px padding (plus room for the info card).
 
@@ -199,7 +217,7 @@ Splitting is done by MapLibre `line-gradient` with `lineMetrics: true` on one Ge
 │ [attribution]                                                              │
 ├─ Playback bar 64px ────────────────────────────────────────────────────────┤
 │ (▶)  [×60 ×120 ×240 ▾]  00:24:29 / 01:12:00   Avg 24.3 km/h  Max 37.2  Dist │
-├─ Chart 140px ──────────────────────────────────────────────────────────────┤
+├─ Chart 166px ──────────────────────────────────────────────────────────────┤
 │ km/h  ▒▒▒ travelled shaded ▒▒▒ │cursor+handle│ remaining                    │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -212,12 +230,12 @@ Splitting is done by MapLibre `line-gradient` with `lineMetrics: true` on one Ge
 - "Drop a file or" + **Open file** button (teal `#0F5C5C`), plus GPX / KML / KMZ format chips (static labels).
 - The whole window is a drop target. While dragging over it, show a full-window dashed overlay "Drop GPX, KML or KMZ".
 
-### 7.2 Info card (top-left overlay, 270 px wide, white, 12 px radius, soft shadow)
+### 7.2 Info card (top-left overlay, 272 px wide, white, 12 px radius, soft shadow)
 - **AT** label + elapsed playback time, large monospace (`HH:MM:SS`). The timeline always runs from 00:00:00 to the track duration. The real clock time appears only here, as a small line under the elapsed time (e.g. "15:45:30 · 31 Aug 2026", in the PC's time zone; "—" for untimed tracks).
 - 2×2 grid: **Speed** (km/h or mph, 1 decimal), **Distance** (km or mi, 1 decimal), **Elevation** (m or ft, integer), **Position** (lat/lon, 5 decimals, with N/S/E/W).
 - Badges when they apply: "Estimated time", "No time data", "Paused …".
 - Values update at most every 100 ms (to avoid flicker) using tabular digits.
-- Collapsible to just the time row (chevron) on small screens.
+- On small screens (< 640 px) a chevron collapses it to just the time row.
 
 ### 7.3 Playback bar
 - **Play/Pause** — 44 px teal circle. Space bar toggles it.
@@ -249,9 +267,9 @@ Splitting is done by MapLibre `line-gradient` with `lineMetrics: true` on one Ge
 Light theme only in v1; all colours are CSS variables, so a dark theme can be added later.
 
 ### 7.6 Responsive
-- ≥ 1024 px: the layout above.
-- < 1024 px: the stats move to a second row of the playback bar.
-- < 640 px: the info card collapses to a single line, the chart is 100 px tall, map controls are 40 px, and the header shows the file chip only (the open button becomes an icon).
+- > 1100 px: the layout above.
+- ≤ 1100 px: the stats move to a second row of the playback bar and the format chips are hidden.
+- ≤ 640 px: the info card spans the map width and gets the collapse chevron (§7.2), the chart is 128 px tall, map controls are 40 px, the header shows the file chip only (the open button becomes an icon), and the drawers are full width.
 
 ### 7.7 Settings panel
 A right-side drawer (360 px; full width on a phone) opened from the header gear. Changes apply immediately and are saved (§8).
@@ -266,6 +284,7 @@ A right-side drawer (360 px; full width on a phone) opened from the header gear.
 | Speed for estimated timing | Derived / Hidden | Derived |
 | Camera while playing (§13.4) | Off / Follow north up / Follow heading up / Keep in view | Keep in view |
 | Smart zoom (§15) | on / off, plus Near zoom, Far zoom, slow and fast speed (text inputs) | off; 17 / 13; speeds from the track average (½× / 2×) |
+| Zoom curve computed for (§16, in the zoom strip) | Rate on file load / Current playback rate | Rate on file load |
 | Position marker (§14) | Dot / Arrow / built-in icon / imported image; size; colour; rotation | Car icon, 24 px, accent red, rotate |
 
 The panel also shows read-only file info: format, producer (`creator`), timing mode, number of points and segments, and spike points removed.
@@ -284,7 +303,7 @@ With no file loaded: the map shows the default view (last viewed area, or Vietna
 | Item | Target |
 |---|---|
 | Parse + derive, 7.5k-point GPX (1.7 MB) | < 300 ms |
-| Parse + derive, 100k points | < 2 s, with no frozen UI (spinner shown) |
+| Parse + derive, 100k points | < 2 s (parsing runs on the UI thread; files over 2 MB show an "Opening …" toast first) |
 | Playback frame rate | 60 fps on a mid-range laptop for 100k points |
 | Chart | Line simplified to ≤ 2 points per horizontal pixel for drawing |
 | Map line | Douglas–Peucker simplification per zoom by MapLibre (built in); no manual decimation unless it fails the 60 fps target |
@@ -301,12 +320,12 @@ trackview/
     settings.ts             settings model + persistence
     parse/ xml.ts gpx.ts kml.ts index.ts   (own small XML parser; KMZ unzip in index.ts)
     model/ types.ts geo.ts build.ts spikes.ts interpolate.ts units.ts series.ts (chart values, shared with the video)
-    map/ trackmap.ts styles.ts tracklayers.ts camera.ts marker.ts smartzoom.ts
-                            (track line layers shared with the export map; camera modes §13.4; position marker §14; smart zoom §15)
+    map/ trackmap.ts styles.ts tracklayers.ts camera.ts marker.ts smartzoom.ts zoomcurve.ts
+                            (track line layers shared with the export map; camera modes §13.4; position marker §14; smart zoom §15; zoom curve §16)
     export/ presets.ts timeline.ts render.ts overlays.ts encode.ts exportpanel.ts   (video export §13)
-    ui/ chart.ts infocard.ts settingspanel.ts markerpanel.ts smartzoomfields.ts (§15.2 inputs, used in settings and export)
+    ui/ chart.ts infocard.ts settingspanel.ts markerpanel.ts smartzoomfields.ts (§15.2 inputs, used in settings and export) zoomstrip.ts (§16)
     styles/ tokens.css app.css
-  test/ (Vitest) samples.test.ts spikes.test.ts build.test.ts export.test.ts smartzoom.test.ts
+  test/ (Vitest) samples.test.ts spikes.test.ts build.test.ts export.test.ts smartzoom.test.ts zoomcurve.test.ts
   src-tauri/                Tauri 2 shell (Cargo.toml, tauri.conf.json, src/main.rs, icons/)
 ```
 
@@ -324,7 +343,7 @@ Tests run against the files in `example_GPSfiles/`:
 9. The layout matches `expected_UI.png` at 1440×900, with no horizontal scroll at 375 px width.
 10. **Spike filter**: it removes 0 points from every sample file. On a synthetic copy of the Apr 15 track with 1-, 2- and 3-point spikes injected 300 m off-route, every spike point is removed and no other point is.
 11. **Units**: switching to Imperial shows the Aug 31 distance as 93.3 mi and its max speed as about 71 mph, with no reload needed.
-12. **Desktop**: `npm run tauri build` produces a working `Trackview.exe`. In it, drag-and-drop of a file from Explorer works, tiles load, and settings survive a restart.
+12. **Desktop**: `npm run tauri build` produces a working `trackview.exe` (and an NSIS installer). In it, drag-and-drop of a file from Explorer works, tiles load, and settings survive a restart.
 
 ## 12. Decisions (v0.1 open questions, answered 2026-10-19)
 | # | Question | Decision |
@@ -471,7 +490,7 @@ The moving marker that shows the vehicle's current position can be changed: its 
 | **Imported image** | A PNG, JPG, WebP or SVG file chosen by the user (e.g. a photo of their own car or a logo) | per §14.3 |
 
 ### 14.2 Size and colour
-- **Size** slider 12–128 px, default **24 px** (the marker's longest side; images keep their aspect ratio). The Dot's diameter is 0.75 × the size (24 px → the v0.1 18 px dot). On the live map the size is in CSS pixels. In video it is defined for 1080 p and scaled with the output height (48 px at 2160 p).
+- **Size** slider 12–128 px, default **24 px** (the marker's longest side; images keep their aspect ratio). The Dot's diameter is 0.75 × the size (24 px → the v0.1 18 px dot). On the live map the size is in CSS pixels. In video it is defined for 1080 p and scaled by the frame's shorter side ÷ 1080, like the overlays (§13.5): 48 px at 2160 p, unchanged in a 1080×1920 vertical frame.
 - **Colour** (Dot, Arrow, built-in icons): accent red `#D2401E` by default; a small palette (red, teal, blue, green, black, white) plus a custom colour picker. Imported images keep their own colours.
 - **Halo** on/off (default on): the soft pulsing halo behind the marker. For images it is a soft circular shadow, so the image stands out on satellite maps.
 
@@ -547,6 +566,8 @@ marker: {
 
 ## 15. Smart zoom while playing (v0.4)
 
+> Since v0.5 the live map and the video do not run this calculation per frame: it is run once per track to build the **zoom curve** (§16), and playback reads the zoom from that curve. §15.2–§15.4 describe how the automatic curve is computed.
+
 While playing, the camera keeps the vehicle **in the centre of the map** and changes the **zoom with the speed**: slow (city streets, stops, junctions) → zoomed in, close to the vehicle; fast (highway) → zoomed out, so more of the route ahead is visible. Status: **approved 2026-10-21**; the decisions are in §15.8.
 
 ### 15.1 Where it applies
@@ -599,9 +620,12 @@ The target zoom comes from the vehicle's speed through a curve between a **Near 
 - Seeking (chart, keyboard) or changing the playback rate while playing: the zoom jumps straight to the target at the new position, no animation.
 
 ### 15.5 Manual control
-- **Zoom readout click** (§6.3) toggles Smart zoom on/off from the map; the copy function moves to a small copy icon next to the readout.
-- Mouse wheel, pinch or the +/− buttons **do not turn Smart zoom off**. They shift the whole curve by the change (an offset, e.g. +1 = everything one level closer). The offset is kept until the next file load or a click on the fit button, and is not saved.
-- Dragging the map still turns the camera Off (§6.3), and Smart zoom with it, until the next fit or file load.
+- Smart zoom is turned on and off **only in the settings** (§7.7; changed 2026-10-23). Nothing on the map switches it off:
+  - Clicking the zoom readout (§6.3) copies the zoom; it does not toggle Smart zoom.
+  - Mouse wheel, pinch or the +/− buttons shift the whole curve by the change (an offset, e.g. +1 = everything one level closer). The offset is kept until the next file load or a click on the fit button while stopped, and is not saved.
+  - Dragging the map pauses the camera while the pointer is down; on release it follows the vehicle again with Smart zoom.
+  - The fit/follow button while playing switches only between Follow north up and Follow heading up (§6.3).
+- Choosing Off or Keep in view in the settings' "Camera while playing" still stops Smart zoom, because it needs a centred camera (§15.1).
 
 ### 15.6 Video export
 - The export camera (§13.4) gets **Zoom: Fixed / Smart**. With Smart, the Zoom slider (§13.3) is replaced by the same four text inputs (Near zoom, Far zoom, Slow speed, Fast speed, with Auto and "Use track average"). They are the **same saved values** as in the settings panel: editing them in either place changes both, so what plays on screen is what the video shows.
@@ -617,7 +641,7 @@ The target zoom comes from the vehicle's speed through a curve between a **Near 
 4. While stopped (dashcam KMZ: 355 duplicate points), the zoom settles at the Near zoom and holds.
 5. Typing Slow speed 40 / Fast speed 120 is applied at once and saved; "Use track average" restores 22 / 87 on Aug 31. Slow 90 / Fast 80 is rejected with a red outline.
 6. Values edited in the export dialog show up in the settings panel and vice versa; a Smart-zoom video of Aug 31 at ×60 zooms out on the expressway and in through town.
-7. Mouse-wheel zoom during playback shifts the zoom and keeps following; a drag turns the camera off; clicking the zoom readout toggles "auto".
+7. Mouse-wheel or +/− zoom during playback shifts the zoom and keeps "auto"; a drag pauses the camera and it follows again with "auto" on release; clicking the zoom readout copies the zoom; the fit button while playing switches between north up and heading up only. Smart zoom turns off only from the settings.
 8. Untimed 52100 KMZ: the option is disabled with "Needs speed data".
 9. Unit tests (no MapLibre): average → Auto speeds, speed → zoom curve, rate widening, rate limit, dead band and look-ahead.
 10. **Sep 13 KMZ** at ×10 (Auto speeds 9 / 34 km/h): crawling at ~8 km/h around 2:00 the target zoom is close to the Near zoom, clearly closer than in the ~20 km/h stretch before it; at 30+ km/h around 3:30 it is near the Far zoom.
@@ -629,4 +653,66 @@ The target zoom comes from the vehicle's speed through a curve between a **Near 
 | 2 | Playback rate widens the view | Yes: zoom out further so the vehicle moves at most ½ map width per second; never closer than the speed curve (§15.4) |
 | 3 | Default | Off (opt-in); remembered once turned on |
 | 4 | Video export | Yes, "Zoom: Fixed / Smart" with the same values (§15.6) |
-| 5 | Quick access | Click the zoom readout to toggle; copy moves to a copy icon next to it (§6.3, §15.5) |
+| 5 | Quick access | ~~Click the zoom readout to toggle~~ — replaced 2026-10-23: Smart zoom is switched only in the settings; the readout click copies the zoom, and map interactions never turn it off (§15.5) |
+
+---
+
+## 16. Zoom curve editor (v0.5)
+
+Smart zoom (§15) is no longer computed live while playing. When a track with speed data is loaded, the smart zoom of the whole trip is computed once as a **zoom curve**: map zoom over the playback timeline, stored as a few control points. A strip under the speed chart shows the curve, and the points can be dragged to fix anything the automatic zoom gets wrong. The follow camera and the video export read the zoom from this curve. Status: **added 2026-10-23**; the decisions are in §16.6.
+
+### 16.1 The automatic curve
+- On file load (and whenever it has to be recomputed, §16.4), the smart zoom is simulated over the whole track exactly as it would play: the §15.2 speed curve with the §15.3 smoothing and look-ahead, the §15.4 rate widening (using the map width at that moment), rate limit and dead band, stepped every 0.1 s of screen time (at most 20,000 steps).
+- The result is reduced to **at most 60 control points** (Douglas–Peucker on the zoom error, starting at 0.1 zoom level and loosening until it fits). The first point is at 0:00, the last at the end of the track.
+- Between points the zoom is **linear** (straight lines); before the first and after the last point it is flat. Linear keeps the curve within about 0.1 level of the simulation (its ramps are the constant 0.5 level/s of the rate limit, which a smooth spline would bend into an S), and dragging a point only changes the two lines next to it.
+- Tracks without speed data get no curve; smart zoom stays unavailable for them (§15.3).
+
+### 16.2 Zoom strip (UI)
+- A strip under the speed chart, shown while Smart zoom is on and the track has a curve. Its plot area is aligned with the speed chart (same left and right edges, same time scale), so a point sits exactly under the matching place on the speed chart.
+- Header: "Zoom", the state ("auto · ×10" or "edited · ×10"; ×N is the rate the automatic curve was computed for), the **Computed for** option (§16.4), **Reset to auto** (disabled while unedited), a live readout of the value under the pointer ("z 15.3 at 00:02:10") and a short help text (hidden on narrow screens).
+- Plot: zoom levels on the left axis (labels at least 16 px apart), the curve as a teal line with its control points as circles, the travelled part tinted light red, and the red playback cursor. When the curve has been edited, the automatic curve is drawn behind it as a dashed grey line.
+- Height: 30 px header + 72 px plot (60 px on a phone, where the header wraps).
+
+### 16.3 Editing
+- **Drag a point**: up/down changes its zoom (steps of 0.05, within 3–20); left/right moves it in time, but never past its neighbours (0.5 s minimum gap). The first and last points move only up/down.
+- **Click the line** (within 10 px of it) between two points: adds a point there and starts dragging it.
+- **Double-click / double-tap a point**: deletes it (not the first or last point).
+- Clicking or dragging anywhere else seeks, like the speed chart (pausing while dragging, resuming afterwards).
+- All grab areas are 10 px around the point or line, so the strip works with touch.
+- Mouse-wheel / +/− zoom while following still shifts the whole curve for the session (§15.5); it does not edit the points.
+
+### 16.4 Which rate the curve is computed for
+The automatic curve depends on the playback rate (§15.3 window, §15.4 rate widening). The **Computed for** option in the strip decides which rate is used:
+
+| Option | Behaviour |
+|---|---|
+| **Rate on file load** (default) | Computed for the rate picked automatically when the file opens (§7.3). Changing the playback rate later does not change the curve, so an edited curve plays exactly as edited at any rate. |
+| **Current playback rate** | Recomputed whenever the playback rate changes (chips, menu, `+`/`-`). |
+
+- Changing the option recomputes the curve for the new choice. A recompute triggered by the option or by a rate change **replaces any edits** (toast "Zoom curve recomputed for …; your edits were replaced.").
+- Changing Near/Far zoom or Slow/Fast speed (§15.2) recomputes an unedited curve. An edited curve is kept (toast: use "Reset to auto" to apply the new values); the dashed automatic curve behind it is updated.
+- **Reset to auto** discards the edits and recomputes the curve for the rate shown in the state.
+- Processing settings that rebuild the track (§7.7: skip pauses, pause threshold, spikes, estimated speed) keep the curve: an edited curve is mapped onto the new timeline, an unedited one is recomputed for the same rate.
+
+### 16.5 Saving and video export
+- Edited curves are saved **per file** in `localStorage` (key `trackview.zoomcurves.v1`, separate from the settings; the 30 most recently edited files are kept). The file is recognised by its name and the time of its first point. Points are stored by **recorded time** (ms after the first point), so they land at the same place on the trip after a rebuild changes the playback timeline; points that fall onto the same position (inside a newly collapsed pause) keep only the last.
+- An unedited curve is not saved; it is recomputed on every load.
+- **Video export** with Zoom: Smart (§15.6) uses the same curve (edited or not) at every frame, including the intro fly-in and outro fly-out, whatever the export rate. Fixed zoom and Whole track are unchanged.
+
+### 16.6 Decisions (answered 2026-10-23)
+| # | Question | Decision |
+|---|---|---|
+| 1 | Where the curve is shown | An extra strip under the speed chart |
+| 2 | How to edit | Drag control points; click the line to add, double-click to delete; "Reset to auto" |
+| 3 | Playback rate | An option: computed for the rate on file load, or recomputed for the current playback rate; changing the option recomputes the curve |
+| 4 | Saving and export | Edits are saved per file and used by the video export |
+| 5 | Interpolation | Linear between points (matches the computed curve; predictable dragging) |
+
+### 16.7 Acceptance criteria
+1. **Sep 13 KMZ** with Smart zoom on: after loading, the strip shows "auto · ×10" with 4–60 points from 0:00 to the end, within 0.15 zoom level of the simulated smart zoom.
+2. Dragging a point changes the live follow zoom at that place: playing through it, the map zoom equals the curve value (readout "z … auto").
+3. The edit survives reloading the file and restarting the app; "Reset to auto" removes it (state back to "auto").
+4. Double-clicking a middle point deletes it; the end points cannot be deleted.
+5. "Current playback rate": choosing ×60 recomputes the curve ("auto · ×60"); back on "Rate on file load" it is ×10 again.
+6. Exporting with Zoom: Smart uses the curve (an edited point shows up in the video's zoom at that place).
+7. Unit tests: curve reduction (point count, ends, accuracy), linear interpolation without overshoot, no curve without speed, save/load round trip across a rebuild.

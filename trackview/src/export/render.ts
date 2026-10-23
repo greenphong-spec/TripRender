@@ -4,6 +4,7 @@ import { drawMarker, markerPose, prepareSprite, type MarkerSprite } from '../map
 import { SmartZoom, smartZoomAvailable } from '../map/smartzoom';
 import { BLANK_STYLE, MAP_STYLES, STYLE_ATTRIBUTION } from '../map/styles';
 import { TrackLayers, trackBounds } from '../map/tracklayers';
+import { curveAt, type ZoomKnot } from '../map/zoomcurve';
 import { sampleAt } from '../model/interpolate';
 import type { Track } from '../model/types';
 import type { ExportOptions, MapStyleId, MarkerSettings, SmartZoomSettings, Units } from '../settings';
@@ -34,6 +35,8 @@ export interface RenderSetup {
   units: Units;
   marker: MarkerSettings;
   smart: SmartZoomSettings;
+  /** Zoom curve of the track (§16); with Zoom: Smart the video reads the zoom from it. */
+  curve: ZoomKnot[] | null;
   opts: ExportOptions;
   from: number;
   to: number;
@@ -231,7 +234,10 @@ export class ExportRenderer {
     const { track, opts } = this.setup;
     const s = sampleAt(track, fi.pos);
     const smart = opts.zoomMode === 'smart' && (opts.camera === 'north' || opts.camera === 'heading') && smartZoomAvailable(track);
-    const z = smart ? this.smartZoom.update(track, fi.pos, plan.rate, 1 / plan.fps, this.W, this.setup.smart) : NaN;
+    const curve = this.setup.curve;
+    const z = !smart ? NaN
+      : curve ? curveAt(curve, fi.pos)
+      : this.smartZoom.update(track, fi.pos, plan.rate, 1 / plan.fps, this.W, this.setup.smart);
     this.zoomNow = Number.isFinite(z) ? z : opts.zoom;
     let cam = this.followCam(fi.pos, plan.rate, fi.t);
     if (fi.follow < 1) cam = this.blend(this.overview, cam, fi.follow);

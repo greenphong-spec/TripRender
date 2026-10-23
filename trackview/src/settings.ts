@@ -30,6 +30,8 @@ export interface SmartZoomSettings {
   far: number;
   slowKmh: number | null;
   fastKmh: number | null;
+  /** Rate the zoom curve is computed for (§16): the one picked on file load, or the current playback rate. */
+  curveRate: 'load' | 'playback';
 }
 
 /** Video export options (§13); From/To are per track and not saved. */
@@ -82,6 +84,7 @@ export const DEFAULT_SMART: SmartZoomSettings = {
   far: 13,
   slowKmh: null,
   fastKmh: null,
+  curveRate: 'load',
 };
 
 export const DEFAULT_MARKER: MarkerSettings = {

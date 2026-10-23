@@ -13,6 +13,7 @@ import { MarkerView } from './marker';
 import { SmartZoom, smartZoomAvailable } from './smartzoom';
 import { BLANK_STYLE, MAP_STYLES } from './styles';
 import { TrackLayers, trackBounds } from './tracklayers';
+import { curveAt, type ZoomKnot } from './zoomcurve';
 
 setWorkerUrl(workerUrl);
 
@@ -51,9 +52,13 @@ export class TrackMap {
   private markerSmooth = new ViewSmoother(0, 0.5);
   private smart = new SmartZoom();
   private smartSettings: SmartZoomSettings = DEFAULT_SMART;
+  /** Zoom curve of the track (§16); smart zoom reads it instead of computing per frame. */
+  private curve: ZoomKnot[] | null = null;
   /** Zoom last set by smart zoom; a different map zoom on the next frame is a manual zoom (§15.5). */
   private autoZoom = NaN;
   private lastFrame = 0;
+  /** A drag while smart zoom follows only pauses the camera until release (§15.5). */
+  private dragging = false;
 
   constructor(container: HTMLElement, styleId: MapStyleId, view: { lng: number; lat: number; zoom: number } | null, marker: MarkerSettings, private events: TrackMapEvents) {
     this.map = new MapLibreMap({
@@ -81,7 +86,11 @@ export class TrackMap {
       if (!this.styleReady) this.useBlankStyle();
       else if ((e as unknown as { sourceId?: string }).sourceId) this.events.onOffline(true);
     });
-    this.map.on('dragstart', () => this.events.onUserPan());
+    this.map.on('dragstart', () => {
+      if (this.smartActive) this.dragging = true;
+      else this.events.onUserPan();
+    });
+    this.map.on('dragend', () => (this.dragging = false));
     this.map.on('moveend', () => {
       const c = this.map.getCenter();
       this.events.onViewChange({ lng: c.lng, lat: c.lat, zoom: this.map.getZoom() });
@@ -144,6 +153,10 @@ export class TrackMap {
     this.markerView.set(ms);
   }
 
+  setZoomCurve(knots: ZoomKnot[] | null): void {
+    this.curve = knots;
+  }
+
   setSmartZoom(sz: SmartZoomSettings): void {
     this.smartSettings = sz;
     this.autoZoom = NaN;
@@ -181,7 +194,7 @@ export class TrackMap {
     const now = performance.now();
     const dt = Math.min(0.1, (now - this.lastFrame) / 1000);
     this.lastFrame = now;
-    if (playing && this.camera !== 'off' && !this.map.isZooming()) {
+    if (playing && this.camera !== 'off' && !this.dragging && !this.map.isZooming()) {
       if (this.camera === 'keep') this.keepInView(s);
       else {
         const v = this.camSmooth.at(t, pos, rate);
@@ -192,7 +205,9 @@ export class TrackMap {
           if (Number.isFinite(this.autoZoom) && Math.abs(this.map.getZoom() - this.autoZoom) > 1e-3) {
             this.smart.shift(this.map.getZoom() - this.autoZoom);
           }
-          const z = this.smart.update(t, pos, rate, dt, this.map.getContainer().clientWidth, this.smartSettings);
+          const z = this.curve
+            ? curveAt(this.curve, pos) + this.smart.offset
+            : this.smart.update(t, pos, rate, dt, this.map.getContainer().clientWidth, this.smartSettings);
           if (Number.isFinite(z)) zoom = z;
         }
         this.map.jumpTo({

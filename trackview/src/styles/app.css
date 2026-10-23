@@ -151,6 +151,18 @@ button { font: inherit; color: inherit; }
 .chart-handle::after { right: 5px; }
 .chart-tip { position: absolute; top: 4px; z-index: 4; background: var(--text); color: #fff; font-size: 11.5px; padding: 4px 8px; border-radius: 6px; pointer-events: none; white-space: nowrap; transform: translateX(-50%); }
 .chart-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--text-muted); }
+/* Zoom curve strip (§16), aligned with the chart's plot area */
+.zoom-strip { padding: 0 72px 10px; border-top: 1px solid var(--border); }
+.zs-head { display: flex; align-items: center; gap: 14px; height: 30px; font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; }
+.zs-title { font-weight: 600; color: var(--text); }
+.zs-state { color: var(--text-faint); }
+.zs-rate select { font: 12px var(--font); margin-left: 4px; }
+#zs-reset { padding: 0; font-size: 12px; }
+#zs-reset:disabled { color: var(--text-faint); text-decoration: none; cursor: default; }
+.zs-readout { color: var(--text); margin-left: auto; }
+.zs-help { color: var(--text-faint); }
+.zs-plot { position: relative; height: 72px; }
+.zs-plot canvas { position: absolute; inset: 0; touch-action: none; cursor: pointer; }
 .link { border: 0; background: none; color: var(--primary); font-weight: 600; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
 .uplot .u-over { cursor: pointer; touch-action: none; }
 
@@ -240,6 +252,8 @@ button { font: inherit; color: inherit; }
 @media (max-width: 1100px) {
   .bar { padding: 10px 24px 4px; gap: 14px; }
   .chart-wrap { padding: 0 24px 34px; }
+  .zoom-strip { padding: 0 24px 10px; }
+  .zs-help { display: none; }
   .stats { width: 100%; order: 5; gap: 20px; }
   .bar > .spacer { display: none; }
   .formats { display: none; }
@@ -262,6 +276,10 @@ button { font: inherit; color: inherit; }
   .rates > button { padding: 0 9px; }
   .stats { gap: 14px; font-size: 12px; }
   .chart-wrap { height: 128px; padding: 0 16px 30px; }
+  .zoom-strip { padding: 0 16px 8px; }
+  .zs-head { flex-wrap: wrap; height: auto; padding: 4px 0; gap: 4px 12px; }
+  .zs-readout { margin-left: 0; }
+  .zs-plot { height: 60px; }
   .chart-unit { left: 4px; }
 }
 @media (max-width: 640px) {

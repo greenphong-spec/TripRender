@@ -1,5 +1,6 @@
 import { markerImageUrl } from '../map/marker';
 import { smartZoomAvailable } from '../map/smartzoom';
+import type { ZoomKnot } from '../map/zoomcurve';
 import type { Track } from '../model/types';
 import { hms, humanDuration } from '../model/units';
 import type { ExportOptions, MapStyleId, Settings } from '../settings';
@@ -25,6 +26,8 @@ export interface ExportHost {
   playerPos(): number;
   pausePlayer(): void;
   mapZoom(): number;
+  /** The track's zoom curve (§16), used by Zoom: Smart. */
+  zoomCurve(): ZoomKnot[] | null;
   openMarkerSettings(): void;
   toast(message: string, error?: boolean): void;
 }
@@ -327,9 +330,10 @@ export class ExportPanel {
     }
     const [from, to] = this.span();
     const track = this.host.track()!;
-    const cfgKey = JSON.stringify([o, s.marker, s.smart, s.units, from, to, track.fileName, track.n, track.stats.duration]);
+    const curve = this.host.zoomCurve();
+    const cfgKey = JSON.stringify([o, s.marker, s.smart, s.units, from, to, track.fileName, track.n, track.stats.duration, curve]);
     if (cfgKey !== this.cfgKey) {
-      await this.renderer.configure({ track, units: s.units, marker: s.marker, smart: s.smart, opts: o, from, to });
+      await this.renderer.configure({ track, units: s.units, marker: s.marker, smart: s.smart, curve, opts: o, from, to });
       this.cfgKey = cfgKey;
     }
     return this.renderer;

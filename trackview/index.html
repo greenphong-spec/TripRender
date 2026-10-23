@@ -130,6 +130,19 @@
           <button type="button" class="link" id="sample-btn">Try a sample</button>
         </div>
       </div>
+      <div class="zoom-strip" id="zoom-strip" hidden>
+        <div class="zs-head">
+          <span class="zs-title">Zoom</span>
+          <span class="zs-state" id="zs-state"></span>
+          <label class="zs-rate">Computed for
+            <select id="zs-rate"><option value="load">rate on file load</option><option value="playback">current playback rate</option></select>
+          </label>
+          <button type="button" class="link" id="zs-reset">Reset to auto</button>
+          <span class="zs-readout mono" id="zs-readout"></span>
+          <span class="zs-help">Drag a point · click the line to add · double-click a point to delete</span>
+        </div>
+        <div class="zs-plot" id="zs-plot"></div>
+      </div>
     </footer>
 
     <aside class="settings" id="settings" hidden>
