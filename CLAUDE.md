@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `trackview/` — the app: a GPS track replay viewer (GPX/KML/KMZ) with a Vite + TypeScript web UI in a Tauri 2 desktop shell. All commands below run from here.
 - `example_GPSfiles/` — real sample tracks used by the tests. Stored byte-exact (`.gitattributes` `-text`); do not let tools rewrite their line endings.
 - `expected_UI.png` — the target mockup.
-- The `Aug_31,_2026_15_20_59.gpx` in the root is an untracked duplicate of the sample. Other untracked scratch files (`debug-with-user-settings.md`, `smart-zoom-open-issue.md` in the root, `trackview/wrongzoom.png`, `trackview/trackview - Shortcut.lnk`) are user/session notes and screenshots: leave them out of commits.
+- The `Aug_31,_2026_15_20_59.gpx` in the root is an untracked duplicate of the sample. Scratch files (`debug-with-user-settings.md`, `smart-zoom-open-issue.md` in the root, `trackview/wrongzoom.png`, `trackview/trackview - Shortcut.lnk`) are user/session notes and screenshots, tracked at the user's request.
 - Versions: `SPEC.md` is at v0.6 draft (§17 satellite imagery download, not implemented yet); the app version in `package.json` / `tauri.conf.json` is still `0.1.0`.
 
 ## Commands (in `trackview/`)
