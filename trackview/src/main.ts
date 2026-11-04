@@ -15,6 +15,7 @@ import { loadSettings, saveSettings, type BuildSettings, type CameraMode, type S
 import { SpeedChart } from './ui/chart';
 import { InfoCard } from './ui/infocard';
 import { MarkerPanel } from './ui/markerpanel';
+import { PhoneView } from './ui/phoneview';
 import { SettingsPanel } from './ui/settingspanel';
 import { SmartZoomFields } from './ui/smartzoomfields';
 import { ZoomStrip } from './ui/zoomstrip';
@@ -77,7 +78,8 @@ function renderCamera() {
   btn.title = `Fit track / camera: ${CAMERA_LABEL[camMode]}`;
 }
 
-const cardInset = () => (!$('info-card').hidden && window.innerWidth > 640 ? CARD_INSET : 0);
+// In the phone view the info card sits beside the frame, not over the map.
+const cardInset = () => (!$('info-card').hidden && window.innerWidth > 640 && !settings.phone.enabled ? CARD_INSET : 0);
 
 // ---------- Chart ----------
 const scrub = {
@@ -99,7 +101,13 @@ function updateSettings(patch: Partial<Settings>) {
   const prev = settings;
   settings = { ...settings, ...patch };
   if (!saveSettings(settings) && patch.marker?.imageDataUrl) toast('The marker image could not be saved for next time (storage full).', true);
-  if (patch.view || patch.export) return;
+  // The phone view draws the video overlays, so it follows the export overlay options too (§18.3).
+  if (patch.phone || patch.export || patch.units || patch.mapStyle) phoneView.apply();
+  if (patch.phone) phoneChanged(prev.phone);
+  if (patch.view || patch.export) {
+    if (patch.export) onPosition(true);
+    return;
+  }
 
   if (patch.mapStyle && patch.mapStyle !== prev.mapStyle) map.setStyle(settings.mapStyle);
   if (patch.camera && patch.camera !== prev.camera) setCamera(settings.camera);
@@ -175,6 +183,24 @@ const exportPanel = new ExportPanel({
   toast,
 });
 
+// ---------- Phone view (§18) ----------
+const phoneView = new PhoneView({
+  settings: () => settings,
+  track: () => track,
+  update: (phone) => updateSettings({ phone }),
+  onLayout: (insetBottom) => map.setFrame(insetBottom, settings.phone.enabled),
+});
+
+function phoneChanged(prev: Settings['phone']) {
+  const ps = settings.phone;
+  if (ps.enabled === prev.enabled && ps.device === prev.device) return onPosition(true);
+  // The frame changed size: resize now (not on the next observer tick) so a fit uses the new size.
+  map.resize();
+  if (track && !player.playing) map.fit(cardInset());
+  onPosition(true);
+  exportPanel.refresh();
+}
+
 // ---------- Zoom curve (§16) ----------
 /** The track's smart zoom as editable control points; the follow camera and the video read the zoom from it. */
 let curve: ZoomCurve | null = null;
@@ -194,7 +220,9 @@ const zoomStrip = new ZoomStrip($('zs-plot'), $('zs-readout'), {
 
 /** Compute the auto curve at `rate`; a saved edited curve for this file wins over it. */
 function refreshCurve(rate: number) {
-  const auto = track && smartZoomAvailable(track) ? autoCurve(track, rate, map.map.getContainer().clientWidth, settings.smart) : null;
+  // The width of the whole map area, also in the phone view, so turning it on or off does not change the curve (§18.3).
+  const width = document.querySelector<HTMLElement>('.map-wrap')!.clientWidth;
+  const auto = track && smartZoomAvailable(track) ? autoCurve(track, rate, width, settings.smart) : null;
   autoKnots = auto?.knots ?? null;
   curve = (track && auto && loadCurve(track)) || auto;
   applyCurve(true);
@@ -310,6 +338,7 @@ function show(t: Track, pos: number) {
   panel.setTrackInfo(t);
   renderTrackText();
   player.setTrack(t, pos);
+  phoneView.apply();
   exportPanel.refresh();
 }
 
@@ -346,6 +375,7 @@ function onPosition(force = false) {
   chart.setPosition(player.pos);
   zoomStrip.setPosition(player.pos);
   info.update(track, s, player.pos, settings.units, force || !player.playing);
+  phoneView.update(s, player.pos, force || !player.playing);
   $('pos-time').textContent = hms(player.pos);
 }
 player.onPosition(() => onPosition());
@@ -519,6 +549,11 @@ document.addEventListener('keydown', (e) => {
     case '-':
       player.setRate(RATES[Math.max(0, RATES.indexOf(player.rate) - 1)]);
       break;
+    case 'p':
+    case 'P':
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      phoneView.toggle();
+      break;
     case 'e':
     case 'E':
       if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -533,6 +568,7 @@ document.addEventListener('keydown', (e) => {
 new ResizeObserver(() => map.resize()).observe($('map'));
 
 map.setSmartZoom(settings.smart);
+phoneView.apply();
 renderCamera();
 renderSmart();
 

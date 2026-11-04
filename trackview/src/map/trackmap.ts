@@ -59,6 +59,10 @@ export class TrackMap {
   private lastFrame = 0;
   /** A drag while smart zoom follows only pauses the camera until release (§15.5). */
   private dragging = false;
+  /** Map pixels at the bottom covered by the phone view's chart strip; the camera keeps the marker above it (§18.3). */
+  private insetBottom = 0;
+  /** Phone view: the map buttons are outside the frame, so a fit needs no room for them. */
+  private framed = false;
 
   constructor(container: HTMLElement, styleId: MapStyleId, view: { lng: number; lat: number; zoom: number } | null, marker: MarkerSettings, private events: TrackMapEvents) {
     this.map = new MapLibreMap({
@@ -153,6 +157,12 @@ export class TrackMap {
     this.markerView.set(ms);
   }
 
+  /** Phone view frame (§18.3): bottom strip kept clear by the follow camera and the fit (0 = whole map, the normal view). */
+  setFrame(insetBottom: number, framed: boolean): void {
+    this.insetBottom = Math.max(0, insetBottom);
+    this.framed = framed;
+  }
+
   setZoomCurve(knots: ZoomKnot[] | null): void {
     this.curve = knots;
   }
@@ -210,11 +220,13 @@ export class TrackMap {
             : this.smart.update(t, pos, rate, dt, this.map.getContainer().clientWidth, this.smartSettings);
           if (Number.isFinite(z)) zoom = z;
         }
+        const b = this.insetBottom;
+        const availH = this.map.getContainer().clientHeight - b;
         this.map.jumpTo({
           center: [v.lon, v.lat],
           zoom,
           bearing: up && Number.isFinite(v.bearing) ? v.bearing : up ? this.map.getBearing() : 0,
-          padding: up ? { ...NO_PADDING, top: this.map.getContainer().clientHeight * (HEADING_UP_Y - 0.5) * 2 } : NO_PADDING,
+          padding: up ? { ...NO_PADDING, top: availH * (HEADING_UP_Y - 0.5) * 2, bottom: b } : { ...NO_PADDING, bottom: b },
         });
         this.autoZoom = zoom === undefined ? NaN : this.map.getZoom();
       }
@@ -225,9 +237,10 @@ export class TrackMap {
   private keepInView(s: Sample) {
     if (this.map.isMoving()) return;
     const p = this.map.project([s.lon, s.lat]);
-    const { clientWidth: w, clientHeight: h } = this.map.getContainer();
+    const { clientWidth: w } = this.map.getContainer();
+    const h = this.map.getContainer().clientHeight - this.insetBottom;
     if (p.x < w * 0.2 || p.x > w * 0.8 || p.y < h * 0.2 || p.y > h * 0.8) {
-      this.map.easeTo({ center: [s.lon, s.lat], duration: 600 });
+      this.map.easeTo({ center: [s.lon, s.lat], padding: { ...NO_PADDING, bottom: this.insetBottom }, duration: 600 });
     }
   }
 
@@ -245,7 +258,7 @@ export class TrackMap {
     this.resetSmartZoom();
     this.map.setPadding(NO_PADDING);
     this.map.fitBounds(trackBounds(t), {
-      padding: { top: pad, bottom: pad, left, right: pad + 60 }, maxZoom: 16, duration: 0, bearing: 0,
+      padding: { top: pad, bottom: pad + this.insetBottom, left, right: pad + (this.framed ? 0 : 60) }, maxZoom: 16, duration: 0, bearing: 0,
     });
   }
 

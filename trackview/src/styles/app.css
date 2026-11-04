@@ -47,6 +47,18 @@ button { font: inherit; color: inherit; }
 #map { position: absolute; inset: 0; }
 .maplibregl-ctrl-attrib { font: 11px var(--font); }
 
+/* Phone view (§18): the map at the phone's CSS size, centred, scaled down only to fit. */
+.map-wrap.phone-on { background: var(--phone-bg); }
+.map-wrap.phone-on #map {
+  inset: auto; left: 50%; top: 50%; transform-origin: 50% 50%;
+  border-radius: 26px; background: var(--map-bg);
+  box-shadow: 0 0 0 10px var(--phone-bezel), 0 0 0 11px var(--phone-bezel-edge), 0 18px 48px rgba(0, 0, 0, 0.4);
+}
+.map-wrap.phone-ov-on #map .maplibregl-ctrl-bottom-left { display: none; } /* the overlay draws the attribution */
+.phone-ov { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
+.phone-label { position: absolute; left: 0; right: 0; text-align: center; font-size: 11.5px; color: var(--phone-label); pointer-events: none; }
+.pv-hint { margin: 0; font-size: 12px; color: var(--text-faint); }
+
 .info-card {
   position: absolute; top: 24px; left: 24px; z-index: 2;
   width: 272px; padding: 18px 18px 16px;

@@ -46,8 +46,10 @@ export class Overlays {
     private from: number,
     private to: number,
     private attribution: string,
+    /** Size factor; default shorter side / 1080 (phone scale passes its own, §18.4). */
+    u = Math.min(W, H) / 1080,
   ) {
-    this.u = Math.min(W, H) / 1080;
+    this.u = u;
     const series = opts.chart ? chartSeries(track, units) : null;
     this.stripH = series && series.mode !== 'none' ? Math.round(H * STRIP_FRACTION) : 0;
     if (series && this.stripH) this.buildStrip(series.ys, series.unit, series.mode === 'ele');

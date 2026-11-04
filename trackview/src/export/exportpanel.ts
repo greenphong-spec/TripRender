@@ -7,7 +7,7 @@ import type { ExportOptions, MapStyleId, Settings } from '../settings';
 import { SmartZoomFields, type SmartZoomHost } from '../ui/smartzoomfields';
 import { downloadBlob, fileSink, isTauri, memorySink, pickCodec, VideoWriter, type Codec } from './encode';
 import {
-  bitrateFor, FRAME_RATES, LONG_VIDEO_SEC, RATE_PRESETS, RESOLUTIONS, resolutionById,
+  bitrateFor, FRAME_RATES, LONG_VIDEO_SEC, phoneDevice, phoneResolutionId, RATE_PRESETS, RESOLUTIONS, resolutionById,
 } from './presets';
 import { ExportRenderer } from './render';
 import { frameAt, makePlan, parseClock, type Plan } from './timeline';
@@ -103,6 +103,7 @@ export class ExportPanel {
       const el = e.target as HTMLInputElement | HTMLSelectElement;
       if (!(el instanceof HTMLInputElement && el.type === 'range') && el.name) this.onField(el);
     });
+    $('ex-use-phone').addEventListener('click', () => this.patch({ resolution: phoneResolutionId(this.host.settings().phone.device) }));
     $('ex-use-zoom').addEventListener('click', () => this.patch({ zoom: Math.round(this.host.mapZoom() * 2) / 2 }));
     $('ex-marker-btn').addEventListener('click', () => this.host.openMarkerSettings());
 
@@ -253,6 +254,11 @@ export class ExportPanel {
     $('ex-outro-row').hidden = overview;
     $('ex-zoom-v').textContent = o.zoom.toFixed(1);
     $('ex-title-row').hidden = o.title !== 'custom';
+    // Phone view on (§18.5): offer its phone-scale resolution.
+    const phone = this.host.settings().phone;
+    const phoneRes = resolutionById(phoneResolutionId(phone.device));
+    $('ex-use-phone').hidden = !phone.enabled || o.resolution === phoneRes.id;
+    $('ex-use-phone').textContent = `Use the phone view size (${phoneDevice(phone.device).label}, ${phoneRes.w}×${phoneRes.h})`;
 
     const ms = this.host.settings().marker;
     const url = markerImageUrl(ms);
@@ -375,7 +381,7 @@ export class ExportPanel {
     const base = t.fileName.replace(/\.[^.]+$/, '').replace(/[^A-Za-z0-9_-]+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '') || 'track';
     const rate = o.rateMode === 'fit' ? `${o.targetSec}s` : `x${o.rate}`;
     const res = resolutionById(o.resolution);
-    const size = res.w > res.h ? `${res.h}p` : `${res.w}x${res.h}`;
+    const size = (res.w > res.h ? `${res.h}p` : `${res.w}x${res.h}`) + (res.dpr ? '_phone' : '');
     return `${base}_${rate}_${size}.${codec.ext}`;
   }
 

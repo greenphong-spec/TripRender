@@ -79,6 +79,9 @@
         <button class="map-btn" id="fit-btn" type="button" title="Fit track / follow marker" aria-label="Fit track">
           <svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" /><path d="M12 2v4M12 18v4M2 12h4M18 12h4" /></svg>
         </button>
+        <button class="map-btn" id="phone-btn" type="button" title="Phone view (P): the map at phone size, as a phone-scale video" aria-label="Phone view" aria-pressed="false">
+          <svg class="ico" viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.2" /><path d="M11 18.5h2" /></svg>
+        </button>
         <button class="map-btn" id="style-btn" type="button" title="Map style" aria-label="Map style">
           <svg class="ico" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5z" /><path d="M3 13l9 5 9-5" /></svg>
         </button>
@@ -184,6 +187,13 @@
         <label class="row check" id="sz-toggle"><input type="checkbox" id="sz-enabled" /> Zoom by speed while following (vehicle centred)</label>
         <div id="sz-settings-fields"></div>
       </section>
+      <section class="mk-panel" id="phone-panel">
+        <h3>Phone view</h3>
+        <label class="row check"><input type="checkbox" id="pv-enabled" /> Show the map at phone size (shortcut P)</label>
+        <label class="row">Phone <select id="pv-device"></select></label>
+        <label class="row check"><input type="checkbox" id="pv-overlays" /> Show the video overlays (info card, chart strip, title)</label>
+        <p class="pv-hint">What the frame shows is what a phone-scale video shows: Export video → Resolution → "phone scale".</p>
+      </section>
       <section class="mk-panel" id="marker-panel">
         <h3>Position marker</h3>
         <div class="mk-preview" id="mk-preview" title="Drop an image here to use it as the marker"></div>
@@ -280,6 +290,7 @@
           <fieldset>
             <legend>Output</legend>
             <label class="row">Resolution <select name="resolution" id="ex-resolution"></select></label>
+            <button type="button" class="link" id="ex-use-phone" hidden>Use the phone view size</button>
             <label class="row">Frame rate <select name="fps" id="ex-fps"></select></label>
             <label class="row">Quality
               <select name="quality"><option value="standard">Standard</option><option value="high">High</option></select>

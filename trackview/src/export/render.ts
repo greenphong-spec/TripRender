@@ -9,7 +9,7 @@ import { sampleAt } from '../model/interpolate';
 import type { Track } from '../model/types';
 import type { ExportOptions, MapStyleId, MarkerSettings, SmartZoomSettings, Units } from '../settings';
 import { Overlays } from './overlays';
-import { resolutionById, TILE_WAIT_MS } from './presets';
+import { markerScale, overlayScale, resolutionById, TILE_WAIT_MS, type Resolution } from './presets';
 import type { FrameInfo, Plan } from './timeline';
 
 // Frame-by-frame renderer on its own hidden map (§13.1). The visible map is never touched.
@@ -46,6 +46,12 @@ export class ExportRenderer {
   readonly W: number;
   readonly H: number;
   readonly canvas: HTMLCanvasElement;
+  /** Map pixel ratio: 1, or the phone's for a phone-scale video (§18.4). */
+  private readonly k: number;
+  /** Map size in CSS pixels (= W×H unless phone scale). */
+  private readonly cw: number;
+  private readonly ch: number;
+  private readonly res: Resolution;
   /** False when the online style could not be loaded: plain background (§13.7). */
   styleOk = true;
   /** Frames rendered before all tiles arrived. */
@@ -71,16 +77,20 @@ export class ExportRenderer {
 
   private constructor(resolution: string, private mapStyle: MapStyleId) {
     const res = resolutionById(resolution);
+    this.res = res;
     this.W = res.w;
     this.H = res.h;
+    this.k = res.dpr ?? 1;
+    this.cw = this.W / this.k;
+    this.ch = this.H / this.k;
     this.canvas = document.createElement('canvas');
     this.canvas.width = this.W;
     this.canvas.height = this.H;
     this.ctx = this.canvas.getContext('2d')!;
     this.container = document.createElement('div');
     this.container.className = 'export-map';
-    this.container.style.width = `${this.W}px`;
-    this.container.style.height = `${this.H}px`;
+    this.container.style.width = `${this.cw}px`;
+    this.container.style.height = `${this.ch}px`;
     document.body.append(this.container);
   }
 
@@ -102,7 +112,7 @@ export class ExportRenderer {
       style: MAP_STYLES[this.mapStyle] as string | StyleSpecification,
       center: [0, 0],
       zoom: 2,
-      pixelRatio: 1,
+      pixelRatio: this.k,
       interactive: false,
       attributionControl: false,
       fadeDuration: 0,
@@ -134,17 +144,18 @@ export class ExportRenderer {
       this.layers.add();
     }
     this.setup = setup;
-    const scale = Math.min(this.W, this.H) / 1080;
-    this.sprite = await prepareSprite(setup.marker, scale);
+    this.sprite = await prepareSprite(setup.marker, markerScale(this.res));
     const attribution = this.styleOk ? STYLE_ATTRIBUTION[this.mapStyle] : '';
-    this.overlays = new Overlays(track, setup.units, opts, this.W, this.H, from, to, attribution);
+    const ou = overlayScale(this.res);
+    this.overlays = new Overlays(track, setup.units, opts, this.W, this.H, from, to, attribution, ou);
 
-    // Whole-track (or range) overview, clear of the info card and the chart strip.
-    const p = Math.round(Math.min(this.W, this.H) * 0.08);
+    // Whole-track (or range) overview, clear of the info card and the chart strip (map CSS pixels).
+    const k = this.k;
+    const p = Math.round(Math.min(this.cw, this.ch) * 0.08);
     const landscape = this.W > this.H;
-    const cardW = opts.infoCard && landscape ? Math.round(320 * scale) : 0;
-    const cardH = opts.infoCard && !landscape ? Math.round(300 * scale) : 0;
-    const padding = { top: p + cardH, bottom: p + this.overlays.stripH, left: p + cardW, right: p };
+    const cardW = opts.infoCard && landscape ? Math.round((320 * ou) / k) : 0;
+    const cardH = opts.infoCard && !landscape ? Math.round((300 * ou) / k) : 0;
+    const padding = { top: p + cardH, bottom: p + this.overlays.stripH / k, left: p + cardW, right: p };
     this.map.setPadding({ top: 0, bottom: 0, left: 0, right: 0 });
     const c = this.map.cameraForBounds(trackBounds(track, from, to), { padding, maxZoom: 17 });
     const center = c?.center ? LngLat.convert(c.center) : new LngLat(track.lon[0], track.lat[0]);
@@ -170,7 +181,8 @@ export class ExportRenderer {
 
   private followCam(pos: number, rate: number, t: number): Cam {
     const { track, opts } = this.setup;
-    const base = { top: 0, bottom: this.overlays.stripH, left: 0, right: 0 };
+    const strip = this.overlays.stripH / this.k;
+    const base = { top: 0, bottom: strip, left: 0, right: 0 };
     if (opts.camera === 'overview') return this.overview;
     if (opts.camera === 'keep') {
       const s = sampleAt(track, pos);
@@ -187,7 +199,7 @@ export class ExportRenderer {
     }
     const v = this.camSmooth.at(track, pos, rate);
     if (opts.camera === 'heading') {
-      const availH = this.H - this.overlays.stripH;
+      const availH = this.ch - strip;
       return {
         lon: v.lon, lat: v.lat, zoom: this.zoomNow,
         bearing: Number.isFinite(v.bearing) ? v.bearing : 0,
@@ -202,12 +214,13 @@ export class ExportRenderer {
   private updateKeep(x: number, y: number, lon: number, lat: number, t: number) {
     const k = this.keep;
     if (!k || k.pan) return;
-    const h = this.H - this.overlays.stripH;
-    const outside = x < 0 || x > this.W || y < 0 || y > h;
+    const w = this.cw;
+    const h = this.ch - this.overlays.stripH / this.k;
+    const outside = x < 0 || x > w || y < 0 || y > h;
     if (outside) {
       k.lon = lon;
       k.lat = lat;
-    } else if (x < this.W * KEEP_BOX || x > this.W * (1 - KEEP_BOX) || y < h * KEEP_BOX || y > h * (1 - KEEP_BOX)) {
+    } else if (x < w * KEEP_BOX || x > w * (1 - KEEP_BOX) || y < h * KEEP_BOX || y > h * (1 - KEEP_BOX)) {
       k.pan = { from: [k.lon, k.lat], to: [lon, lat], t0: t };
     }
   }
@@ -237,7 +250,7 @@ export class ExportRenderer {
     const curve = this.setup.curve;
     const z = !smart ? NaN
       : curve ? curveAt(curve, fi.pos)
-      : this.smartZoom.update(track, fi.pos, plan.rate, 1 / plan.fps, this.W, this.setup.smart);
+      : this.smartZoom.update(track, fi.pos, plan.rate, 1 / plan.fps, this.cw, this.setup.smart);
     this.zoomNow = Number.isFinite(z) ? z : opts.zoom;
     let cam = this.followCam(fi.pos, plan.rate, fi.t);
     if (fi.follow < 1) cam = this.blend(this.overview, cam, fi.follow);
@@ -248,18 +261,20 @@ export class ExportRenderer {
     const ctx = this.ctx;
     ctx.drawImage(this.map.getCanvas(), 0, 0, this.W, this.H);
 
-    const scale = Math.min(this.W, this.H) / 1080;
+    const scale = markerScale(this.res);
+    const k = this.k;
+    // project() gives map CSS pixels; the frame is in output pixels.
     const pt = (lon: number, lat: number) => this.map.project([lon, lat]);
     const a = pt(track.lon[0], track.lat[0]);
     const b = pt(track.lon[track.n - 1], track.lat[track.n - 1]);
-    drawEndpoints(ctx, a.x, a.y, b.x, b.y, scale);
+    drawEndpoints(ctx, a.x * k, a.y * k, b.x * k, b.y * k, scale);
 
     const p = pt(s.lon, s.lat);
     if (fi.phase === 'main' && this.setup.opts.camera === 'keep') this.updateKeep(p.x, p.y, s.lon, s.lat, fi.t);
     const screenDeg = this.markerSmooth.at(track, fi.pos, plan.rate).bearing - this.map.getBearing();
     const pose = markerPose(this.setup.marker, screenDeg, this.flip);
     this.flip = pose.flip;
-    drawMarker(ctx, this.sprite, p.x, p.y, pose, screenDeg, scale);
+    drawMarker(ctx, this.sprite, p.x * k, p.y * k, pose, screenDeg, scale);
 
     this.overlays.draw(ctx, s, fi.pos);
   }

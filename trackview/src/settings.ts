@@ -1,4 +1,4 @@
-import { DEFAULT_RATE, DEFAULT_RESOLUTION } from './export/presets';
+import { DEFAULT_PHONE_DEVICE, DEFAULT_RATE, DEFAULT_RESOLUTION } from './export/presets';
 
 export type Units = 'metric' | 'imperial';
 export type MapStyleId = 'light' | 'streets' | 'satellite';
@@ -32,6 +32,14 @@ export interface SmartZoomSettings {
   fastKmh: number | null;
   /** Rate the zoom curve is computed for (§16): the one picked on file load, or the current playback rate. */
   curveRate: 'load' | 'playback';
+}
+
+/** Phone view (§18): the live map in a phone-sized frame, as a phone-scale video will show it. */
+export interface PhoneViewSettings {
+  enabled: boolean;
+  device: string; // id in PHONE_DEVICES
+  /** Draw the video overlays (info card, chart strip, title, attribution) in the frame. */
+  overlays: boolean;
 }
 
 /** Video export options (§13); From/To are per track and not saved. */
@@ -68,6 +76,7 @@ export interface Settings {
   smart: SmartZoomSettings;
   marker: MarkerSettings;
   export: ExportOptions;
+  phone: PhoneViewSettings;
   rate: number;
   view: { lng: number; lat: number; zoom: number } | null;
 }
@@ -96,6 +105,12 @@ export const DEFAULT_MARKER: MarkerSettings = {
   rotation: 'rotate',
   imageFrontDeg: 0,
   imageDataUrl: null,
+};
+
+export const DEFAULT_PHONE: PhoneViewSettings = {
+  enabled: false,
+  device: DEFAULT_PHONE_DEVICE,
+  overlays: true,
 };
 
 export const DEFAULT_EXPORT: ExportOptions = {
@@ -131,6 +146,7 @@ export const DEFAULTS: Settings = {
   smart: DEFAULT_SMART,
   marker: DEFAULT_MARKER,
   export: DEFAULT_EXPORT,
+  phone: DEFAULT_PHONE,
   rate: 120,
   view: null,
 };
@@ -148,6 +164,7 @@ export function loadSettings(): Settings {
         marker: { ...DEFAULT_MARKER, ...saved.marker },
         smart: { ...DEFAULT_SMART, ...saved.smart },
         export: { ...DEFAULT_EXPORT, ...saved.export },
+        phone: { ...DEFAULT_PHONE, ...saved.phone },
       };
       // v0.1 had a follow on/off toggle (§13.4).
       if (!saved.camera && saved.follow !== undefined) s.camera = saved.follow ? 'keep' : 'off';

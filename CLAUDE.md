@@ -15,7 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `example_GPSfiles/` — real sample tracks used by the tests. Stored byte-exact (`.gitattributes` `-text`); do not let tools rewrite their line endings.
 - `expected_UI.png` — the target mockup.
 - The `Aug_31,_2026_15_20_59.gpx` in the root is an untracked duplicate of the sample. Other untracked scratch files (`debug-with-user-settings.md`, `smart-zoom-open-issue.md` in the root, `trackview/wrongzoom.png`, `trackview/trackview - Shortcut.lnk`) are user/session notes and screenshots: leave them out of commits.
-- Versions: `SPEC.md` is at v0.5 (§16); the app version in `package.json` / `tauri.conf.json` is still `0.1.0`.
+- Versions: `SPEC.md` is at v0.6 draft (§17 satellite imagery download, not implemented yet); the app version in `package.json` / `tauri.conf.json` is still `0.1.0`.
 
 ## Commands (in `trackview/`)
 
@@ -56,7 +56,7 @@ Data flows one way: **file bytes → `RawTrack` → `Track` → playback positio
 
 7. **Video export (`src/export/`)** — `timeline.ts` maps frame index → playback position (rate presets in `presets.ts`, fit-to-duration, range, intro/outro). `render.ts` owns a hidden MapLibre map at the output size (`.export-map`, off-screen); per frame it `jumpTo`s the camera, waits for tiles (`settle`), copies the WebGL canvas into a 2D canvas and draws markers plus `overlays.ts` (info card, chart strip, title, attribution). `encode.ts` encodes with Mediabunny (WebCodecs H.264 → MP4, VP9/WebM fallback); desktop streams to a file picked with the Tauri dialog/fs plugins, the browser buffers then downloads. `exportpanel.ts` is the drawer UI.
 
-8. **Other UI (`src/ui/`)** — `infocard.ts` (the info card, updated every 100 ms), `settingspanel.ts` (settings drawer form), `markerpanel.ts` (§14 position-marker group in that drawer). Display helpers in `src/model/`: `series.ts` (5-point smoothed chart series in display units), `units.ts` (metric/imperial conversion and formatting), `geo.ts` (haversine, bearing, distance to a segment). Colours are CSS tokens in `src/styles/tokens.css`.
+8. **Other UI (`src/ui/`)** — `phoneview.ts` (§18 phone view: sizes `#map` to the phone's CSS size with a CSS scale to fit, draws the export `Overlays` over it, and tells `TrackMap.setFrame` the strip inset; phone-scale export resolutions carry `dpr` in `presets.ts` and the export map uses it as `pixelRatio`), `infocard.ts` (the info card, updated every 100 ms), `settingspanel.ts` (settings drawer form), `markerpanel.ts` (§14 position-marker group in that drawer). Display helpers in `src/model/`: `series.ts` (5-point smoothed chart series in display units), `units.ts` (metric/imperial conversion and formatting), `geo.ts` (haversine, bearing, distance to a segment). Colours are CSS tokens in `src/styles/tokens.css`.
 
 `main.ts` is the composition root (header, playback bar, file open/drop, keyboard, settings → rebuild/re-render). Settings live in `localStorage` key `trackview.settings.v1` (`settings.ts`; persisted by WebView2 across launches).
 

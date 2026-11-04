@@ -1,9 +1,9 @@
-# Trackview — Specification (v0.5)
+# Trackview — Specification (v0.6 draft)
 
 A desktop GPS track viewer (web UI in a Tauri shell) that **replays** a recorded trip on a real online map,
 with a live info card and a speed chart synced to the map. Target look: `expected_UI.png`.
 
-Status: §1–§12 approved for implementation 2026-10-19 (decisions on the v0.1 open questions are in §12). §13 Video export approved 2026-10-20 (decisions in §13.10). §14 Position marker approved 2026-10-20 (decisions in §14.8). §15 Smart zoom approved 2026-10-21 (decisions in §15.8). §16 Zoom curve editor added 2026-10-23 (decisions in §16.6).
+Status: §1–§12 approved for implementation 2026-10-19 (decisions on the v0.1 open questions are in §12). §13 Video export approved 2026-10-20 (decisions in §13.10). §14 Position marker approved 2026-10-20 (decisions in §14.8). §15 Smart zoom approved 2026-10-21 (decisions in §15.8). §16 Zoom curve editor added 2026-10-23 (decisions in §16.6). §17 Satellite view and route imagery download drafted 2026-11-01 (open questions in §17.9). §18 Phone view and phone-scale video added 2026-11-03.
 
 ---
 
@@ -19,7 +19,7 @@ Status: §1–§12 approved for implementation 2026-10-19 (decisions on the v0.1
 
 **Non-goals (v1)**
 - Editing tracks, routing, uploading or sharing tracks, user accounts.
-- Offline maps / tile download (tiles are fetched online; the browser HTTP cache is enough).
+- Offline maps / tile download (tiles are fetched online; the browser HTTP cache is enough). Since v0.6, satellite imagery along the route can be downloaded (§17).
 - FIT, TCX, NMEA and other formats (the parser layer is pluggable, so they can be added later).
 - Several tracks open at once (one file at a time in v1).
 - Changes to the GPXSee C++ code — Trackview is a separate app (see §2).
@@ -182,7 +182,7 @@ Binary-search `playT` for the bracketing points i, i+1 and compute the fraction 
 - All three endpoints were checked and respond (HTTP 200, 2026-10-19).
 - OpenFreeMap: OpenStreetMap data, no API key, no registration, no published request limit. Attribution "© OpenFreeMap © OpenMapTiles Data from OpenStreetMap" stays visible at all times (MapLibre attribution control).
 - The style list lives in one config file (`src/map/styles.ts`), so a keyed provider (MapTiler, Stadia) can be added later by pasting a URL and key.
-- **No tile database or offline cache** in v1; the browser HTTP cache is enough.
+- **No tile database or offline cache** in v1; the browser HTTP cache is enough. v0.6 adds an optional download of satellite imagery along the route (§17); without a download, everything here is unchanged.
 - **Offline / tile failure**: the track, markers and chart still render on a plain background, with a small "Map tiles unavailable — offline?" notice. Playback keeps working.
 
 ### 6.2 Layers (top to bottom)
@@ -716,3 +716,135 @@ The automatic curve depends on the playback rate (§15.3 window, §15.4 rate wid
 5. "Current playback rate": choosing ×60 recomputes the curve ("auto · ×60"); back on "Rate on file load" it is ×10 again.
 6. Exporting with Zoom: Smart uses the curve (an edited point shows up in the video's zoom at that place).
 7. Unit tests: curve reduction (point count, ends, accuracy), linear interpolation without overshoot, no curve without speed, save/load round trip across a rebuild.
+
+## 17. Satellite view and route imagery download (v0.6, draft)
+
+Trackview already has a plain **Satellite** style (Esri World Imagery, §6.1), loaded tile by tile while you watch. This module makes satellite imagery good enough to **show a trip to other people**: an imagery style with road and place labels, and a **download of the imagery around the route**, so replay and video export show every tile sharply, without waiting and without a network connection (for example on a laptop in a meeting). Status: **draft 2026-11-01**, waiting for the decisions in §17.9.
+
+### 17.1 Isolation: no impact on current features
+This is a hard requirement. The module is an add-on:
+- New code lives in a new folder `src/offline/` (tile store, corridor planner, download queue) plus a new drawer `src/ui/offlinepanel.ts`. Existing modules only get small hook points: an extra entry in `styles.ts`, one menu item in the style switcher, one line in the export map setup.
+- Parsing, `buildTrack`, playback, chart, info card, camera modes, smart zoom and the zoom curve are **not changed**.
+- **Light** and **Streets** are not changed at all. **Satellite** with no downloaded imagery for the open file uses exactly the style object it uses today (same URL, same behaviour). The cache-aware tile loader (§17.4) is switched in only when the open file has a downloaded pack.
+- If the tile store cannot be opened (IndexedDB blocked, storage full) or anything in the module throws, the app falls back to today's online behaviour and shows a notice once ("Offline imagery unavailable — using online tiles"). Nothing else is affected.
+- A download runs in the background with limited concurrency (§17.5). Playback, scrubbing and video export keep working during it.
+- New settings have defaults, so existing saved settings (`trackview.settings.v1`) load unchanged. Pack data has its own storage (§17.4), not the settings key.
+- All existing tests pass unchanged; the module adds its own tests.
+
+### 17.2 Map styles
+| Style | Content | Change |
+|---|---|---|
+| Satellite | Esri World Imagery only | unchanged (gains offline support, §17.4) |
+| **Satellite + labels** (new) | Esri World Imagery with road lines and place names on top | new style id `hybrid` |
+
+- Labels come from Esri's raster reference layers (`Reference/World_Transportation` for roads, `Reference/World_Boundaries_and_Places` for names), drawn over the imagery. They are raster tiles from the same provider, so they download and cache like the imagery (see §17.9 #2 for the alternative).
+- The track, markers and all other layers draw on top exactly as on the other styles (§6.2).
+- The style switcher (§6.3), settings (§7.7) and export (§13) list the new style. Attribution: "Imagery © Esri, Maxar, Earthstar Geographics; labels © Esri" (map control, and burned into the video, §13.5).
+
+### 17.3 Corridor: which tiles are downloaded
+The download covers what the follow camera can show along the route, nothing else.
+- **Zoom range**: Min zoom to Max zoom, default 10–18 (the imagery goes up to 19). If the open file's zoom curve (§16) or fixed export zoom goes higher, the default Max zoom is raised to cover it (rounded up).
+- **Overview**: at zoom levels ≤ 12, the whole track bounds plus a 20 % margin.
+- **Corridor**: from zoom 13 up, every tile within a buffer distance of the track (all segments; segment breaks are not bridged). The buffer at zoom z is half the diagonal of the **view size** at z, so the area around the marker is covered in every direction, including heading-up rotation. View size options: Current window / 1080p export (default) / 4K export.
+- Waypoints get the same buffer as the track.
+- Planning is linear in the number of points: walk the track in steps of at most half a tile at each zoom and collect tile ids in a set (no O(n²) work; files can have 100k+ points).
+- **Estimate before download**: tile count per zoom, total, and size (25 kB per tile until real tiles have been measured, then the measured average). Example at latitude 11° N, 1080p, zoom ≤ 18: about 120 tiles and 3 MB per km of route.
+- **Limits**: a warning above 5,000 tiles; at most 30,000 tiles per pack (about 750 MB). Over the limit the drawer suggests a lower Max zoom or a smaller view size, and Download stays disabled.
+
+### 17.4 Storage and how the map uses it
+- Tiles are stored in **IndexedDB** (database `trackview-tiles`), so the same code works in WebView2, on the browser dev server and in a future Android build. Each record holds the tile image bytes keyed by `layer/z/x/y` and the ids of the packs that use it (a tile shared by two packs is stored once).
+- A **pack** is the download for one file: file name + time of the first point (the same file key as the zoom curves, §16.5), style, zoom range, view size, tile count, bytes, date and state (complete / partial).
+- When the open file has a pack, the Satellite / Satellite + labels tile URLs go through a MapLibre custom protocol (`addProtocol('tvtile', …)`). The loader returns the stored tile if there is one; otherwise it fetches the tile online as today (without storing it).
+- The **video export map** (§13) uses the same loader, so frames inside the corridor render without network waits and `settle()` finishes sooner.
+- Online browsing without a pack keeps relying on the browser HTTP cache, as today.
+- No CSP change is needed: tiles are fetched from the same `https:` host already allowed in `connect-src`.
+
+### 17.5 Download
+- Started from the drawer (§17.6). The queue fetches at most **4 tiles at a time**, retries a failed tile 3 times with back-off, and sends plain tile requests like the map does.
+- It can be **paused, resumed and cancelled**. An interrupted pack (cancelled, app closed, network lost) is kept as **partial**; pressing Download again fetches only the missing tiles.
+- Progress: tiles done / total, MB, speed, time left; the style switcher shows a small progress ring while a download runs.
+- Low zoom levels download first, so a partial pack already works as an overview.
+- A tile the provider does not have (HTTP 404, or the "map data not yet available" placeholder) is recorded as missing and not retried.
+
+### 17.6 Offline imagery drawer (UI)
+Opened from the style switcher ("Download imagery for this route…") or from settings. A right-side drawer like Export (360 px; full width on a phone; touch-sized controls).
+- Style to download: Satellite / Satellite + labels.
+- Min zoom, Max zoom and View size (§17.3), with the live estimate under them.
+- **Download** / Pause / Resume / Cancel, with progress (§17.5).
+- **Preview corridor**: while the drawer is open, draws the planned tile outlines at the current map zoom (a separate layer, removed on close).
+- **Stored imagery**: the list of packs (file name, date, size, state) with Delete, plus the storage used and available (`navigator.storage.estimate()`). Deleting a pack removes only the tiles no other pack uses.
+- **Use only downloaded tiles** (default off), to check a pack: tiles outside it show the plain background instead of being fetched.
+
+### 17.7 Settings added (§7.7)
+| Setting | Options | Default |
+|---|---|---|
+| Map style | Light / Streets / Satellite / Satellite + labels | Light (unchanged) |
+| Imagery download: min / max zoom | 3–19 | 10 / 18 |
+| Imagery download: view size | Current window / 1080p / 4K | 1080p |
+
+### 17.8 Out of scope for v0.6
+- 3D terrain and tilted views (useful for showing hills, but they need an elevation tile source and camera changes; a later module).
+- Imagery capture dates, historical imagery, a choice of imagery providers.
+- Downloading the Light / Streets vector maps.
+- Exporting a pack to a file or copying it to another PC.
+
+### 17.9 Open questions (to decide before implementation)
+| # | Question | Proposed default |
+|---|---|---|
+| 1 | **Imagery provider and licence.** The keyless Esri endpoint is fine for viewing (§12 #5), but Esri's terms restrict bulk download and offline storage of its tiles without an ArcGIS account. Options: (a) keep the keyless endpoint and download only small corridors for personal use; (b) a free ArcGIS Location Platform key entered once in settings; (c) another keyed provider (e.g. MapTiler Satellite). The current terms must be checked before choosing. | (b) if its terms allow offline storage in a personal app; otherwise (a) with the §17.3 limits |
+| 2 | Labels in Satellite + labels: Esri raster reference layers (download with the imagery) or OpenFreeMap vector roads/names (sharper text, but online only unless cached too) | Esri reference layers |
+| 3 | Storage: IndexedDB inside the app (§17.4), or tile files on disk via the Tauri fs plugin (easier to inspect and copy, but desktop-only code) | IndexedDB |
+| 4 | Defaults for zoom range, view size and the 30,000-tile limit | 10–18, 1080p, 30,000 |
+| 5 | Download automatically when a file is opened, or only when started by hand | Only by hand |
+
+### 17.10 Acceptance criteria
+1. **No regressions**: all existing unit tests pass unchanged; with no pack, Light / Streets / Satellite load the same style objects as before (unit test on `styles.ts`); the §11 / §13.9 / §15.7 / §16.7 criteria still hold.
+2. Satellite + labels shows road names over the imagery, the track and markers draw on top, and switching styles keeps feature-state and markers (§6.2).
+3. **Sep 13 KMZ**, 1080p, zoom 10–18: the estimate is shown before download; the download completes; the pack appears in Stored imagery with its size.
+4. With the network off after that download, Sep 13 plays from start to end on Satellite with the follow camera and smart zoom on, with no blank tiles inside the corridor and no "Map tiles unavailable" notice.
+5. With the network off, a 1080p video export of Sep 13 on Satellite reports 0 frames with missing tiles.
+6. Cancelling halfway leaves a partial pack; Download again fetches only the missing tiles (request count = missing tile count).
+7. Deleting one of two packs that share tiles leaves the other pack complete.
+8. **Aug 24 KML**: playback and scrubbing stay smooth while a download is running.
+9. With IndexedDB blocked, Satellite still works online and one notice is shown.
+10. Unit tests: corridor tile set (overview + buffered corridor, segment breaks not bridged, rotation covered by the half-diagonal buffer), estimate within 10 % of the planned set, linear run time on a 100k-point synthetic track, tile store round trip with shared tiles, resume of a partial pack.
+
+## 18. Phone view and phone-scale video (v0.6)
+
+Shows the live map at a **phone's screen size** before rendering, and renders videos at that same scale, so what is seen in the phone frame is what the phone video shows. Status: **implemented 2026-11-03**.
+
+### 18.1 Isolation
+- Off by default. With it off, the map, camera, smart zoom, zoom curve, fit and video export behave exactly as before; the existing export resolutions (including `vertical` 1080×1920 at pixel ratio 1) are unchanged.
+- It is the same MapLibre map in a smaller container, so playback, follow modes, smart zoom with its manual offset, dragging, wheel/pinch zoom, waypoints and hover all work as in the normal view.
+- New setting key `phone` inside `trackview.settings.v1`; older saved settings load with the defaults.
+
+### 18.2 Phones
+| Id | Label | CSS size (pt) | Pixel ratio | Video |
+|---|---|---|---|---|
+| `p916` (default) | Phone 9:16 | 360×640 | 3 | 1080×1920 |
+| `p209` | Android 20:9 | 432×960 | 2.5 | 1080×2400 |
+| `p195` | iPhone 19.5:9 | 390×844 | 3 | 1170×2532 |
+
+The list is one constant (`PHONE_DEVICES` in `src/export/presets.ts`).
+
+### 18.3 Phone view (live map)
+- Toggled by the phone button in the map controls, the `P` key, or Settings → Phone view (with the phone choice and "Show the video overlays", default on).
+- The map container gets the phone's CSS size and is centred in the map area with a bezel; it is only **scaled down** (CSS transform) when the window is too small, never up. A label under the frame shows phone, CSS size, video size and the scale.
+- With overlays on, the export overlays (§13.5: info card, chart strip, title, attribution) are drawn over the frame with the export code at the video's pixel size, using the export options (info card, chart, title, time shown), about 15 times per second while playing. The MapLibre attribution control is hidden then, because the overlay draws it.
+- Like the video, the follow camera keeps the marker centred in the area **above the chart strip** (bottom padding = strip height), heading-up puts it at 65 % of that area, Keep in view and Fit use that area too. With no strip (overlays off) the whole frame is used; in the normal view the padding is 0, as before.
+- The zoom curve (§16) is computed with the width of the whole map area also while the phone view is on, so turning it on or off does not change the curve or the zoom values.
+- Fit while stopped re-fits the track to the frame when the view is turned on/off or the phone changes. The app's info card stays beside the frame.
+
+### 18.4 Phone-scale video
+- Export → Resolution lists one **"phone scale"** entry per phone (`phone-<id>`). The hidden export map is created at the phone's CSS size with `pixelRatio` = the phone's ratio, so the video has the phone's pixel size while lines, labels and the map scale look as on the phone and as in the phone view (same zoom number = same ground area).
+- Marker and start/end points are scaled by the pixel ratio; overlays by pixel ratio × 0.75 (`PHONE_OVERLAY_SCALE`), so the info card is about 57 % of the frame width on a 9:16 phone.
+- Camera paddings, Keep in view and the whole-track overview are computed in map CSS pixels, so the framing equals the phone view.
+- When the phone view is on and another resolution is chosen, the export dialog offers "Use the phone view size (…)". File names get a `_phone` suffix, e.g. `Sep_13_2026_11_26_19_x10_1080x1920_phone.mp4`.
+
+### 18.5 Acceptance criteria
+1. Phone view off: no visual or behavioural change; all earlier unit tests pass unchanged.
+2. **Sep 13 KMZ**, Phone 9:16, overlays on, Follow north up: the frame is 360×640 pt; while playing the marker stays at the centre of the area above the chart strip (x 180, y ≈ 269).
+3. Export with "1080×1920 phone scale (Phone 9:16)": the export map is 360×640 CSS at ratio 3 (canvas 1080×1920) with the same bottom padding as the phone view.
+4. Turning the phone view off restores the full-size map, the attribution control and zero padding.
+5. Unit tests: phone resolutions (CSS size × ratio, even sizes, scales), unchanged existing resolutions, settings defaults and migration.
+
