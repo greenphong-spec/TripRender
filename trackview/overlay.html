@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Trackview overlay renderer</title>
+    <!-- Headless entry for tools/overlay-render.mjs (SPEC §19). Not part of the app UI. -->
+    <style>
+      body { margin: 0; background: #fff; }
+      .export-map, .export-map.maplibregl-map { position: fixed; left: -100000px; top: 0; pointer-events: none; }
+    </style>
+  </head>
+  <body>
+    <script type="module" src="/src/overlay/main.ts"></script>
+  </body>
+</html>

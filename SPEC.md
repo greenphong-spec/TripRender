@@ -3,7 +3,7 @@
 A desktop GPS track viewer (web UI in a Tauri shell) that **replays** a recorded trip on a real online map,
 with a live info card and a speed chart synced to the map. Target look: `expected_UI.png`.
 
-Status: §1–§12 approved for implementation 2026-10-19 (decisions on the v0.1 open questions are in §12). §13 Video export approved 2026-10-20 (decisions in §13.10). §14 Position marker approved 2026-10-20 (decisions in §14.8). §15 Smart zoom approved 2026-10-21 (decisions in §15.8). §16 Zoom curve editor added 2026-10-23 (decisions in §16.6). §17 Satellite view and route imagery download drafted 2026-11-01 (open questions in §17.9). §18 Phone view and phone-scale video added 2026-11-03.
+Status: §1–§12 approved for implementation 2026-10-19 (decisions on the v0.1 open questions are in §12). §13 Video export approved 2026-10-20 (decisions in §13.10). §14 Position marker approved 2026-10-20 (decisions in §14.8). §15 Smart zoom approved 2026-10-21 (decisions in §15.8). §16 Zoom curve editor added 2026-10-23 (decisions in §16.6). §17 Satellite view and route imagery download drafted 2026-11-01 (open questions in §17.9). §18 Phone view and phone-scale video added 2026-11-03. §19 Headless overlay renderer (map clips for dashvid) added 2026-11-17.
 
 ---
 
@@ -848,3 +848,38 @@ The list is one constant (`PHONE_DEVICES` in `src/export/presets.ts`).
 4. Turning the phone view off restores the full-size map, the attribution control and zero padding.
 5. Unit tests: phone resolutions (CSS size × ratio, even sizes, scales), unchanged existing resolutions, settings defaults and migration.
 
+
+## 19. Headless overlay renderer (v0.6)
+
+Renders map clips without the app UI, so another program can lay the map over its own footage. The first user is **dashvid** (`D:\DashTrip\dashvid`), which puts a small real map in the bottom-right corner of dashcam videos, only around turns, junctions and big speed changes. Status: **implemented 2026-11-17**.
+
+### 19.1 Isolation
+- Nothing in the app changes: `overlay.html` is a second page that only the dev server serves; the Tauri build and the export dialog do not use it.
+- The only shared-code change: `ExportRenderer.create()` also accepts a `Resolution` object (any size, optional pixel ratio), not only an id from `RESOLUTIONS`.
+
+### 19.2 Pieces
+| File | Role |
+|---|---|
+| `overlay.html` + `src/overlay/main.ts` | Page that exposes `window.trackviewOverlay` (below). It sets the MapLibre worker URL itself and imports only `tokens.css`. |
+| `tools/overlay-render.mjs` | Node driver: starts Vite (`createServer`, port 5199 or the next free one), opens the page in headless Chrome (falls back to Edge) with `playwright-core`, renders the frames of each clip and pipes them as PNG to ffmpeg. |
+
+`window.trackviewOverlay`:
+- `load(job)`: parses the track (base64 GPX/KML/KMZ), builds it with **pauses kept at full length** (`skipPauses: false`), so the playback position is simply *time − first point time*; rejects untimed tracks. Creates an `ExportRenderer` at `width`×`height` with pixel ratio `dpr`, map style, camera (`heading` default), tilt, fixed zoom or smart zoom (§15, default on), marker (§14). No info card, chart, title, intro or outro; attribution stays (§13.5).
+- `camera(cam)`: switch camera between clips (e.g. `overview`); also resets.
+- `reset()`: forget camera smoothing and zoom easing (start of a clip).
+- `frame({ t, rate, fps })`: render the frame at track time `t` (epoch ms); `rate` = track seconds per video second (drives camera smoothing and smart zoom's rate cap). Returns a PNG data URL.
+- `info()`: track start/end, point count, style loaded, frames with missing tiles.
+
+### 19.3 Job file (`node tools/overlay-render.mjs job.json`)
+`track`, `ffmpeg`, `width`, `height`, `dpr`, `mapStyle`, `camera`, `tilt`, `zoom`, `smartZoom`, `smart` (partial §15 settings), `marker` (partial §14 settings), `crf`, `clips[]` and/or `stills[]`. A clip is `{ out, t0, rate, fps, frames, camera? }`; frame *k* shows `t0 + k / fps × rate × 1000`. Clips are encoded H.264 yuv444p, BT.709 limited range, CRF 12, written as `*.part.mp4` and renamed when complete. A still is `{ out, t, rate }` → PNG.
+
+### 19.4 Rendering
+- Chrome runs with `--enable-unsafe-swiftshader --use-angle=swiftshader` (software WebGL; this PC has no GPU driver and headless Chrome refuses SwiftShader without the flag).
+- Measured on this PC: about 70–120 ms per 576×432 frame at pixel ratio 1.33 including tile waits; startup about 15 s.
+- Tiles are online (OpenFreeMap / Esri); without network the map falls back to the plain background and the driver prints a warning.
+
+### 19.5 Acceptance criteria
+1. App behaviour, typecheck and all existing unit tests unchanged.
+2. A job with a still at a known time of the Sep 13 KMZ writes a PNG with the marker on the track at that time.
+3. A 90-frame clip at rate 1 encodes to a 3 s MP4 whose marker moves along the track; `heading` keeps the marker at 65 % height.
+4. Two clips with different cameras in one job render both (camera switch works without reloading the track).

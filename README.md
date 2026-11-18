@@ -21,6 +21,8 @@ and renders it to video. It is a Vite + TypeScript web UI in a Tauri 2 shell for
   (info card, chart strip, title).
 - **Phone view**: previews the map at a phone's screen size and exports phone-scale video
   (e.g. 1080×1920 at pixel ratio 3).
+- **Headless map clips for other tools**: `tools/overlay-render.mjs` renders the export map frame by frame
+  from a job file, without the UI. dashvid uses it for the corner map in dashcam videos (see below).
 
 The full behaviour, including acceptance criteria and design decisions, is in [`SPEC.md`](SPEC.md).
 
@@ -48,6 +50,19 @@ On Windows, `run_trackview.bat` does the same as `npm run tauri dev`: it install
 | `npm test` | Unit tests (Vitest) against the samples in `example_GPSfiles/` |
 | `npm run typecheck` | TypeScript check (`strict`) |
 
+## Map clips for dashvid (headless overlay renderer)
+
+dashvid (`D:\DashTrip\dashvid`) calls this to draw the small real map in the corner of its dashcam videos.
+It needs `npm install` done here (it uses `playwright-core` with the installed Chrome or Edge) and internet for the tiles.
+
+```sh
+node tools/overlay-render.mjs job.json
+```
+
+The job file names the track, the size, the map style and camera, and the clips to render
+(start time, rate, frame count); the format is at the top of `tools/overlay-render.mjs` and in SPEC §19.
+dashvid writes its jobs to `<trip>\_dashvid\map\job.json`, so a failed run can be repeated by hand with the command above.
+
 ## Keyboard
 
 | Key | Action |
@@ -67,8 +82,10 @@ trackview/            the app
   src/map/            MapLibre map, track layers, markers, camera, smart zoom, zoom curve
   src/ui/             chart (uPlot), info card, settings, marker panel, zoom strip, phone view
   src/export/         video export: timeline, renderer, overlays, encoder, presets, dialog
+  src/overlay/        headless page for map clips (overlay.html), used by tools/overlay-render.mjs
   src/player.ts       playback clock
   src/main.ts         app wiring
+  tools/              overlay-render.mjs: renders map clips from a job file (SPEC §19)
   src-tauri/          Tauri 2 shell
   test/               unit tests
 example_GPSfiles/     sample tracks used by the tests

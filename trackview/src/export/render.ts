@@ -75,8 +75,8 @@ export class ExportRenderer {
   private wake: (() => void) | null = null;
   private cancelled = false;
 
-  private constructor(resolution: string, private mapStyle: MapStyleId) {
-    const res = resolutionById(resolution);
+  private constructor(resolution: string | Resolution, private mapStyle: MapStyleId) {
+    const res = typeof resolution === 'string' ? resolutionById(resolution) : resolution;
     this.res = res;
     this.W = res.w;
     this.H = res.h;
@@ -94,8 +94,11 @@ export class ExportRenderer {
     document.body.append(this.container);
   }
 
-  /** Create the hidden map at the output size; the slow part, so it is kept while only options change. */
-  static async create(resolution: string, mapStyle: MapStyleId): Promise<ExportRenderer> {
+  /**
+   * Create the hidden map at the output size; the slow part, so it is kept while only options change.
+   * `resolution` is an id from RESOLUTIONS or, for the headless overlay renderer (§19), any size.
+   */
+  static async create(resolution: string | Resolution, mapStyle: MapStyleId): Promise<ExportRenderer> {
     const r = new ExportRenderer(resolution, mapStyle);
     try {
       await r.init();

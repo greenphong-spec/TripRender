@@ -15,6 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `example_GPSfiles/` — real sample tracks used by the tests. Stored byte-exact (`.gitattributes` `-text`); do not let tools rewrite their line endings.
 - `expected_UI.png` — the target mockup.
 - The `Aug_31,_2026_15_20_59.gpx` in the root is an untracked duplicate of the sample. Scratch files (`debug-with-user-settings.md`, `smart-zoom-open-issue.md` in the root, `trackview/wrongzoom.png`, `trackview/trackview - Shortcut.lnk`) are user/session notes and screenshots, tracked at the user's request.
+- `trackview/overlay.html`, `trackview/src/overlay/`, `trackview/tools/overlay-render.mjs` — headless map-clip renderer for dashvid (SPEC §19); not part of the app build.
 - Versions: `SPEC.md` is at v0.6 draft (§17 satellite imagery download, not implemented yet); the app version in `package.json` / `tauri.conf.json` is still `0.1.0`.
 
 ## Commands (in `trackview/`)
@@ -27,6 +28,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | All tests | `npm test` |
 | One test file / one test | `npx vitest run test/spikes.test.ts` / `npx vitest run -t "Aug 31"` |
 | Type check (TypeScript 7) | `npm run typecheck` |
+| Map clips / stills from a job file (headless, §19) | `node tools/overlay-render.mjs job.json` |
 
 - Rust is installed via rustup but Git Bash may not have it on PATH: `export PATH="$USERPROFILE/.cargo/bin:$PATH"` before `tauri` commands. A full release build takes ~1 min after the first one.
 - The running exe locks the binary; stop it before rebuilding (`Get-Process trackview | Stop-Process`).
@@ -56,7 +58,9 @@ Data flows one way: **file bytes → `RawTrack` → `Track` → playback positio
 
 7. **Video export (`src/export/`)** — `timeline.ts` maps frame index → playback position (rate presets in `presets.ts`, fit-to-duration, range, intro/outro). `render.ts` owns a hidden MapLibre map at the output size (`.export-map`, off-screen); per frame it `jumpTo`s the camera, waits for tiles (`settle`), copies the WebGL canvas into a 2D canvas and draws markers plus `overlays.ts` (info card, chart strip, title, attribution). `encode.ts` encodes with Mediabunny (WebCodecs H.264 → MP4, VP9/WebM fallback); desktop streams to a file picked with the Tauri dialog/fs plugins, the browser buffers then downloads. `exportpanel.ts` is the drawer UI.
 
-8. **Other UI (`src/ui/`)** — `phoneview.ts` (§18 phone view: sizes `#map` to the phone's CSS size with a CSS scale to fit, draws the export `Overlays` over it, and tells `TrackMap.setFrame` the strip inset; phone-scale export resolutions carry `dpr` in `presets.ts` and the export map uses it as `pixelRatio`), `infocard.ts` (the info card, updated every 100 ms), `settingspanel.ts` (settings drawer form), `markerpanel.ts` (§14 position-marker group in that drawer). Display helpers in `src/model/`: `series.ts` (5-point smoothed chart series in display units), `units.ts` (metric/imperial conversion and formatting), `geo.ts` (haversine, bearing, distance to a segment). Colours are CSS tokens in `src/styles/tokens.css`.
+8. **Headless overlay renderer (§19)** — `overlay.html` + `src/overlay/main.ts` expose `window.trackviewOverlay` (`load` / `camera` / `reset` / `frame` / `info`) around an `ExportRenderer` with a custom `Resolution`; the track is built with `skipPauses: false`, so position = time − first point time. `tools/overlay-render.mjs` (Node) starts Vite programmatically on port 5199+, drives the page in headless Chrome/Edge via `playwright-core`, and pipes PNG frames into ffmpeg. External user: dashvid (`D:\DashTrip\dashvid\mapclip.py`), which writes the job file; keep the job format and the `trackviewOverlay` API backwards compatible or update dashvid with it.
+
+9. **Other UI (`src/ui/`)** — `phoneview.ts` (§18 phone view: sizes `#map` to the phone's CSS size with a CSS scale to fit, draws the export `Overlays` over it, and tells `TrackMap.setFrame` the strip inset; phone-scale export resolutions carry `dpr` in `presets.ts` and the export map uses it as `pixelRatio`), `infocard.ts` (the info card, updated every 100 ms), `settingspanel.ts` (settings drawer form), `markerpanel.ts` (§14 position-marker group in that drawer). Display helpers in `src/model/`: `series.ts` (5-point smoothed chart series in display units), `units.ts` (metric/imperial conversion and formatting), `geo.ts` (haversine, bearing, distance to a segment). Colours are CSS tokens in `src/styles/tokens.css`.
 
 `main.ts` is the composition root (header, playback bar, file open/drop, keyboard, settings → rebuild/re-render). Settings live in `localStorage` key `trackview.settings.v1` (`settings.ts`; persisted by WebView2 across launches).
 
@@ -80,4 +84,5 @@ Data flows one way: **file bytes → `RawTrack` → `Track` → playback positio
 - Mediabunny: pass bitrate as `new Quality({ bitrate })`; a bare number is not a bitrate (H.264 check fails, files ~12× too big).
 - In dev, `window.trackview.exportPanel` is exposed too; to load a sample from the console, fetch it from `/@fs/...` and dispatch a `drop` event with a `DataTransfer` on `window`.
 - To reproduce a bug report, use the user's saved settings, not defaults. The desktop app's localStorage is in `%LOCALAPPDATA%\com.phong.trackview\EBWebView\Default\Local Storage\leveldb\*.log` (grep the `trackview.settings.v1` / `trackview.zoomcurves.v1` JSON, decoding as latin-1).
+- Headless Chrome only gives WebGL with `--enable-unsafe-swiftshader --use-angle=swiftshader` (set in `tools/overlay-render.mjs`); without it the overlay map stays blank. Test the renderer with a `stills` job before a long `clips` job.
 - Avoid O(n²) work in `build.ts`/parsers: files can have 100k+ points and parsing runs on the UI thread (`test/build.test.ts` guards the time-fill path).
